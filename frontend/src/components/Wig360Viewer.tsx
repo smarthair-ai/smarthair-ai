@@ -29,51 +29,67 @@ export default function Wig360Viewer({ wigId, wigName, wigIcon }: Wig360ViewerPr
 
   // 多角度帧支持（如果存在 frames/ 目录）
   const [frames, setFrames] = useState<string[]>([]);
+  const [frameAngles, setFrameAngles] = useState<number[]>([]);
   const [currentFrameIdx, setCurrentFrameIdx] = useState(0);
 
   const dragStartRef = useRef({ x: 0, y: 0, rotation: 0, tilt: 0 });
   const lastDragTimeRef = useRef(0);
   const velocityRef = useRef(0); // 拖拽释放后的惯性速度
 
+  // 8 方向多角度帧定义（角度按顺时针排列）
+  const ANGLE_DEFS = [
+    { name: "front", label: "正面", angle: 0 },
+    { name: "right-front", label: "右前", angle: 45 },
+    { name: "right", label: "右侧", angle: 90 },
+    { name: "right-back", label: "右后", angle: 135 },
+    { name: "back", label: "背面", angle: 180 },
+    { name: "left-back", label: "左后", angle: 225 },
+    { name: "left", label: "左侧", angle: 270 },
+    { name: "left-front", label: "左前", angle: 315 },
+  ];
+
   // 检测是否存在多角度帧图片
+  // 按 8 方向顺序收集，缺失的用 null 占位，保持角度对应关系
   useEffect(() => {
-    // 尝试加载 5 帧角度图：正面、左前、左侧、左后、背面
-    const angleNames = ["front", "left-front", "left", "left-back", "back"];
-    const possibleFrames = angleNames.map(
-      (name) => `/wigs/${wigId}/frames/${name}.png`
-    );
+    const checkFrame = (url: string) =>
+      new Promise<string | null>((resolve) => {
+        const img = new Image();
+        img.onload = () => resolve(url);
+        img.onerror = () => resolve(null);
+        img.src = url;
+      });
 
-    // 也检查旧的命名方式
-    const legacyFrames = [0, 1, 2, 3, 4].map(
-      (i) => `/wigs/${wigId}/frames/frame-${i}.png`
-    );
-
-    const checkFrames = async (urls: string[]) => {
+    const checkNamedFrames = async () => {
       const results = await Promise.all(
-        urls.map(
-          (url) =>
-            new Promise<string | null>((resolve) => {
-              const img = new Image();
-              img.onload = () => resolve(url);
-              img.onerror = () => resolve(null);
-              img.src = url;
-            })
+        ANGLE_DEFS.map((def) => checkFrame(`/wigs/${wigId}/frames/${def.name}.png`))
+      );
+      return results; // 保持 8 长度，缺失为 null
+    };
+
+    const checkLegacyFrames = async () => {
+      const results = await Promise.all(
+        [0, 1, 2, 3, 4, 5, 6, 7].map((i) =>
+          checkFrame(`/wigs/${wigId}/frames/frame-${i}.png`)
         )
       );
-      return results.filter((r): r is string => r !== null);
+      return results;
     };
 
     (async () => {
-      const found = await checkFrames(possibleFrames);
-      if (found.length >= 3) {
-        setFrames(found);
-      } else {
-        const legacyFound = await checkFrames(legacyFrames);
-        if (legacyFound.length >= 3) {
-          setFrames(legacyFound);
-        }
-        // 否则使用单图模式
+      const named = await checkNamedFrames();
+      const hasNamed = named.some((f) => f !== null);
+      const slots = hasNamed ? named : await checkLegacyFrames();
+
+      // 仅保留存在的帧，但记录其原始角度索引
+      const found = slots
+        .map((url, idx) => ({ url, idx }))
+        .filter((item): item is { url: string; idx: number } => item.url !== null);
+
+      if (found.length >= 2) {
+        setFrames(found.map((f) => f.url));
+        setFrameAngles(found.map((f) => ANGLE_DEFS[f.idx]?.angle ?? f.idx * 45));
       }
+      // 否则使用单图模式
     })();
   }, [wigId]);
 
@@ -114,15 +130,24 @@ export default function Wig360Viewer({ wigId, wigName, wigIcon }: Wig360ViewerPr
     lastDragTimeRef.current = now;
 
     // 如果有多角度帧，根据旋转角度切换帧
-    if (frames.length > 0) {
-      // 将旋转角度映射到帧索引
-      // 旋转 0° = 正面（帧 0），向左旋转到 -180° = 背面（帧 4）
+    if (frames.length > 0 && frameAngles.length > 0) {
       const normalized = ((newRotation % 360) + 360) % 360; // 0~360
-      // 0° = front, 90° = left, 180° = back, 270° = right
-      // 映射到帧数组
-      const frameProgress = normalized / 360;
-      const idx = Math.round(frameProgress * frames.length) % frames.length;
-      setCurrentFrameIdx(idx);
+      // 找到离当前角度最近的存在帧
+      let minDiff = Infinity;
+      let bestIdx = 0;
+      for (let i = 0; i < frameAngles.length; i++) {
+        // 镜像对称：180° 之后的区域映射回已有帧
+        let targetAngle = frameAngles[i];
+        if (normalized > 180) {
+          targetAngle = 360 - targetAngle;
+        }
+        const diff = Math.abs(normalized - targetAngle);
+        if (diff < minDiff) {
+          minDiff = diff;
+          bestIdx = i;
+        }
+      }
+      setCurrentFrameIdx(bestIdx);
     }
   }, [isDragging, frames]);
 
@@ -182,14 +207,24 @@ export default function Wig360Viewer({ wigId, wigName, wigIcon }: Wig360ViewerPr
   // 角度指示器（基于旋转角度计算）
   const angleLabel = (() => {
     const normalized = ((rotation % 360) + 360) % 360;
-    if (frames.length > 0) {
-      const labels = ["正面", "左前 45°", "左侧 90°", "左后 135°", "背面 180°"];
-      return labels[currentFrameIdx] || "正面";
+    if (frames.length > 0 && frameAngles.length > 0) {
+      const displayAngle = normalized <= 180 ? normalized : 360 - normalized;
+      const side = normalized <= 180 ? "右" : "左";
+      const def = ANGLE_DEFS.find((d) => d.angle === frameAngles[currentFrameIdx]);
+      if (def) {
+        const label = def.label.replace("右", side).replace("左", side);
+        return `${label} · ${Math.round(displayAngle)}°`;
+      }
+      return `${Math.round(displayAngle)}°`;
     }
-    if (normalized < 45 || normalized > 315) return "正面";
-    if (normalized < 135) return "左侧";
-    if (normalized < 225) return "背面";
-    return "右侧";
+    if (normalized < 22.5 || normalized > 337.5) return "正面";
+    if (normalized < 67.5) return "右前";
+    if (normalized < 112.5) return "右侧";
+    if (normalized < 157.5) return "右后";
+    if (normalized < 202.5) return "背面";
+    if (normalized < 247.5) return "左后";
+    if (normalized < 292.5) return "左侧";
+    return "左前";
   })();
 
   return (
