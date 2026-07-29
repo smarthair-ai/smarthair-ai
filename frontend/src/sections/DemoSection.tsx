@@ -10,8 +10,10 @@ import {
   SlidersHorizontal,
   Loader2,
   ArrowRight,
+  Camera,
 } from "lucide-react";
 import { demoFaces, demoHairTypes, recommendations } from "@/data/content";
+import CameraScan from "@/components/CameraScan";
 
 type Step = 0 | 1 | 2 | 3;
 
@@ -21,6 +23,18 @@ export default function DemoSection() {
   const [hairType, setHairType] = useState<string | null>(null);
   const [analyzing, setAnalyzing] = useState(false);
   const [arView, setArView] = useState(0);
+  const [showCamera, setShowCamera] = useState(false);
+
+  const handleCameraDetected = (face: string, hair: string) => {
+    setFaceShape(face);
+    setHairType(hair);
+    setShowCamera(false);
+    setAnalyzing(true);
+    setTimeout(() => {
+      setAnalyzing(false);
+      setStep(2);
+    }, 1500);
+  };
 
   const handleAnalyze = () => {
     if (!faceShape || !hairType) return;
@@ -129,6 +143,27 @@ export default function DemoSection() {
                 exit={{ opacity: 0, y: -20 }}
                 className="space-y-6"
               >
+                {/* Camera scan button */}
+                <div className="flex justify-center">
+                  <button
+                    onClick={() => setShowCamera(true)}
+                    className="flex items-center gap-2 px-6 py-3 rounded-xl glass-card border border-[var(--neon-cyan)]/30 text-white font-medium hover:border-[var(--neon-cyan)]/60 hover:shadow-[0_0_20px_oklch(0.70_0.18_200/0.2)] transition-all duration-300"
+                  >
+                    <Camera className="w-4 h-4 text-[var(--neon-cyan)]" />
+                    <span>摄像头智能检测</span>
+                    <span className="text-xs text-[var(--neon-cyan)] px-2 py-0.5 rounded-full bg-[var(--neon-cyan)]/10">
+                      NEW
+                    </span>
+                  </button>
+                </div>
+
+                {/* Divider */}
+                <div className="flex items-center gap-3">
+                  <div className="flex-1 h-px bg-white/10" />
+                  <span className="text-xs text-[var(--muted-foreground)]">或手动选择</span>
+                  <div className="flex-1 h-px bg-white/10" />
+                </div>
+
                 {/* Face shape selection */}
                 <div className="glass-card rounded-2xl p-6">
                   <div className="flex items-center gap-2 mb-4">
@@ -504,6 +539,16 @@ export default function DemoSection() {
           </AnimatePresence>
         </div>
       </div>
+
+      {/* Camera scan modal */}
+      <AnimatePresence>
+        {showCamera && (
+          <CameraScan
+            onDetected={handleCameraDetected}
+            onClose={() => setShowCamera(false)}
+          />
+        )}
+      </AnimatePresence>
     </section>
   );
 }
