@@ -3,6 +3,6 @@
   "sub_project_type": "",
   "name": "SmartHair AI 智能发型设计系统",
   "app_slug": "smarthair-ai",
-  "version_description": "修复TS类型错误，生产构建通过，准备部署",
+  "version_description": "添加摄像头智能检测功能",
   "preview_type": "pc"
 }

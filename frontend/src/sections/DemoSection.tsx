@@ -14,6 +14,7 @@ import {
 } from "lucide-react";
 import { demoFaces, demoHairTypes, recommendations } from "@/data/content";
 import CameraScan from "@/components/CameraScan";
+import ARTryOn from "@/components/ARTryOn";
 
 type Step = 0 | 1 | 2 | 3;
 
@@ -24,6 +25,7 @@ export default function DemoSection() {
   const [analyzing, setAnalyzing] = useState(false);
   const [arView, setArView] = useState(0);
   const [showCamera, setShowCamera] = useState(false);
+  const [showAR, setShowAR] = useState(false);
 
   const handleCameraDetected = (face: string, hair: string) => {
     setFaceShape(face);
@@ -353,14 +355,20 @@ export default function DemoSection() {
                 </div>
 
                 {/* Continue button */}
-                <div className="flex justify-center">
+                <div className="flex flex-col items-center gap-3">
+                  <button
+                    onClick={() => setShowAR(true)}
+                    className="flex items-center gap-2 px-8 py-3.5 rounded-xl bg-gradient-to-r from-[var(--neon-purple)] to-[var(--neon-cyan)] text-white font-medium hover:shadow-[0_0_30px_oklch(0.65_0.25_300/0.4)] transition-all"
+                  >
+                    <Camera className="w-4 h-4" />
+                    <span>开启真实 AR 试戴</span>
+                    <span className="text-xs px-2 py-0.5 rounded-full bg-white/20">AI</span>
+                  </button>
                   <button
                     onClick={() => setStep(3)}
-                    className="flex items-center gap-2 px-7 py-3 rounded-xl bg-gradient-to-r from-[var(--neon-purple)] to-[var(--neon-cyan)] text-white font-medium hover:shadow-[0_0_30px_oklch(0.65_0.25_300/0.4)] transition-all"
+                    className="text-sm text-[var(--muted-foreground)] hover:text-white transition-colors"
                   >
-                    <Glasses className="w-4 h-4" />
-                    <span>AR 虚拟试戴 TOP1</span>
-                    <ArrowRight className="w-4 h-4" />
+                    或查看模拟预览 →
                   </button>
                 </div>
               </motion.div>
@@ -548,6 +556,11 @@ export default function DemoSection() {
             onClose={() => setShowCamera(false)}
           />
         )}
+      </AnimatePresence>
+
+      {/* AR try-on modal */}
+      <AnimatePresence>
+        {showAR && <ARTryOn onClose={() => setShowAR(false)} />}
       </AnimatePresence>
     </section>
   );
