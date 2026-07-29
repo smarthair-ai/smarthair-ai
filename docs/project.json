@@ -1,8 +1,8 @@
 {
   "project_type": "prototype",
   "sub_project_type": "",
-  "name": "SmartHair AI 智能发型设计系统",
+  "name": "SmartHair AI",
   "app_slug": "smarthair-ai",
-  "version_description": "新增多角度序列帧假发切换功能",
+  "version_description": "升级 360 度预览为图片式拖拽旋转",
   "preview_type": "pc"
 }

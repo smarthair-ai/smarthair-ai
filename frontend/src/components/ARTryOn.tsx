@@ -7,8 +7,8 @@ import {
   type HeadPose,
 } from "@/utils/headPose";
 
-// 懒加载 3D 预览组件（减少首屏体积）
-const Wig3DViewer = lazy(() => import("@/components/Wig3DViewer"));
+// 懒加载 360° 预览组件（减少首屏体积）
+const Wig360Viewer = lazy(() => import("@/components/Wig360Viewer"));
 
 interface ARTryOnProps {
   onClose: () => void;
@@ -340,7 +340,7 @@ export default function ARTryOn({ onClose }: ARTryOnProps) {
               <Box className="w-5 h-5 text-[var(--neon-purple)]" />
             )}
             <span className="text-sm font-medium text-white">
-              {mode === "ar" ? "AR 虚拟试戴" : "3D 自由预览"}
+              {mode === "ar" ? "AR 虚拟试戴" : "360° 自由预览"}
             </span>
             {mode === "ar" && faceDetected && (
               <span className="flex items-center gap-1 text-xs text-[var(--neon-cyan)]">
@@ -372,7 +372,7 @@ export default function ARTryOn({ onClose }: ARTryOnProps) {
               }`}
             >
               <Box className="w-3.5 h-3.5" />
-              <span className="hidden sm:inline">3D 预览</span>
+              <span className="hidden sm:inline">360° 预览</span>
             </button>
             <button
               onClick={onClose}
@@ -454,20 +454,21 @@ export default function ARTryOn({ onClose }: ARTryOnProps) {
         </div>
         )}
 
-        {/* Viewport — 3D 预览模式 */}
+        {/* Viewport — 360° 预览模式 */}
         {mode === "3d" && (
         <div className="relative aspect-[3/4] bg-black overflow-hidden">
           <Suspense
             fallback={
               <div className="absolute inset-0 flex flex-col items-center justify-center">
                 <Loader2 className="w-10 h-10 text-[var(--neon-purple)] animate-spin mb-3" />
-                <span className="text-sm text-[var(--muted-foreground)]">正在加载 3D 引擎...</span>
+                <span className="text-sm text-[var(--muted-foreground)]">正在加载预览引擎...</span>
               </div>
             }
           >
-            <Wig3DViewer
+            <Wig360Viewer
               wigId={WIG_STYLES[currentWig].id}
               wigName={WIG_STYLES[currentWig].name}
+              wigIcon={WIG_STYLES[currentWig].icon}
             />
           </Suspense>
         </div>
@@ -517,7 +518,7 @@ export default function ARTryOn({ onClose }: ARTryOnProps) {
             )}
             {mode === "3d" && (
               <p className="text-[10px] text-[var(--muted-foreground)] mt-2 text-center">
-                拖拽旋转查看 360° 细节 · 滚轮缩放
+                拖拽旋转查看 360° 细节 · 滚轮缩放 · 双击重置
               </p>
             )}
           </div>
