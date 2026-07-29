@@ -13,6 +13,7 @@ const WIG_STYLES = [
   { id: "bob", name: "波波头", icon: "💇" },
   { id: "long", name: "长直发", icon: "👩" },
   { id: "french-bob", name: "法式慵懒波波烫", icon: "🇫🇷" },
+  { id: "wolf-cut", name: "高层次狼尾长发", icon: "🐺" },
 ];
 
 export default function ARTryOn({ onClose }: ARTryOnProps) {
@@ -181,6 +182,54 @@ export default function ARTryOn({ onClose }: ARTryOnProps) {
         );
         ctx.stroke();
       }
+    } else if (wigId === "wolf-cut") {
+      // 高层次狼尾长发（程序化备用）
+      // 顶部蓬松区
+      ctx.beginPath();
+      ctx.ellipse(0, -h * 0.05, w * 0.5, h * 0.35, 0, Math.PI, 0);
+      ctx.fill();
+      // 轻薄齐刘海
+      ctx.beginPath();
+      ctx.ellipse(0, h * 0.05, w * 0.35, h * 0.1, 0, 0, Math.PI);
+      ctx.fill();
+      // 两侧高层次长发 + 狼尾碎发
+      for (const side of [-1, 1]) {
+        const baseX = side * w * 0.35;
+        // 主长发
+        ctx.beginPath();
+        ctx.moveTo(baseX, -h * 0.05);
+        ctx.quadraticCurveTo(side * w * 0.55, h * 0.25, side * w * 0.45, h * 0.55);
+        ctx.quadraticCurveTo(side * w * 0.35, h * 0.75, side * w * 0.5, h * 0.9);
+        ctx.lineTo(side * w * 0.25, h * 0.9);
+        ctx.quadraticCurveTo(side * w * 0.28, h * 0.6, side * w * 0.25, h * 0.3);
+        ctx.quadraticCurveTo(side * w * 0.22, h * 0.1, baseX, -h * 0.05);
+        ctx.fill();
+        // 狼尾碎须
+        ctx.strokeStyle = "oklch(0.35 0.03 30)";
+        ctx.lineWidth = 1.5;
+        for (let i = 0; i < 5; i++) {
+          ctx.beginPath();
+          ctx.moveTo(baseX + side * i * w * 0.04, h * 0.15 + i * h * 0.08);
+          ctx.quadraticCurveTo(
+            baseX + side * (w * 0.1 + i * w * 0.03),
+            h * 0.35 + i * h * 0.08,
+            baseX + side * (w * 0.05 + i * w * 0.02),
+            h * 0.55 + i * h * 0.06
+          );
+          ctx.stroke();
+        }
+      }
+      // 高光
+      ctx.strokeStyle = "oklch(0.45 0.05 30)";
+      ctx.lineWidth = 1.2;
+      ctx.beginPath();
+      ctx.moveTo(-w * 0.15, -h * 0.15);
+      ctx.lineTo(-w * 0.22, h * 0.65);
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.moveTo(w * 0.15, -h * 0.15);
+      ctx.lineTo(w * 0.22, h * 0.65);
+      ctx.stroke();
     }
 
     ctx.restore();
