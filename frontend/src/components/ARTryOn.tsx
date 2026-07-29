@@ -12,6 +12,7 @@ const WIG_STYLES = [
   { id: "curly", name: "羊毛卷", icon: "🌀" },
   { id: "bob", name: "波波头", icon: "💇" },
   { id: "long", name: "长直发", icon: "👩" },
+  { id: "french-bob", name: "法式慵懒波波烫", icon: "🇫🇷" },
 ];
 
 export default function ARTryOn({ onClose }: ARTryOnProps) {
@@ -143,6 +144,43 @@ export default function ARTryOn({ onClose }: ARTryOnProps) {
       ctx.moveTo(w * 0.2, -h * 0.2);
       ctx.lineTo(w * 0.25, h * 0.7);
       ctx.stroke();
+    } else if (wigId === "french-bob") {
+      // 法式慵懒波波烫（程序化备用）
+      ctx.beginPath();
+      ctx.ellipse(0, 0, w * 0.52, h * 0.38, 0, Math.PI, 0);
+      ctx.fill();
+      // 两侧慵懒大C波纹
+      for (let side of [-1, 1]) {
+        ctx.beginPath();
+        ctx.moveTo(side * w * 0.5, -h * 0.05);
+        for (let i = 0; i <= 6; i++) {
+          const t = i / 6;
+          const x = side * (w * 0.5 + Math.sin(t * Math.PI * 2) * w * 0.08);
+          const y = -h * 0.05 + t * h * 0.75;
+          ctx.lineTo(x, y);
+        }
+        ctx.lineTo(side * w * 0.35, h * 0.7);
+        ctx.quadraticCurveTo(side * w * 0.42, h * 0.35, side * w * 0.35, -h * 0.05);
+        ctx.fill();
+      }
+      // 刘海
+      ctx.beginPath();
+      ctx.ellipse(0, h * 0.02, w * 0.35, h * 0.12, 0, 0, Math.PI);
+      ctx.fill();
+      // 纹理线条
+      ctx.strokeStyle = "oklch(0.45 0.05 30)";
+      ctx.lineWidth = 1.5;
+      for (let i = -3; i <= 3; i++) {
+        ctx.beginPath();
+        ctx.moveTo(i * w * 0.1, -h * 0.15);
+        ctx.quadraticCurveTo(
+          i * w * 0.12 + Math.sin(i) * w * 0.03,
+          h * 0.15,
+          i * w * 0.1,
+          h * 0.45
+        );
+        ctx.stroke();
+      }
     }
 
     ctx.restore();
