@@ -3,6 +3,6 @@
   "sub_project_type": "",
   "name": "SmartHair AI 智能发型设计系统",
   "app_slug": "smarthair-ai",
-  "version_description": "替换羊毛卷为真实假发图片",
+  "version_description": "新增多角度序列帧假发切换功能",
   "preview_type": "pc"
 }

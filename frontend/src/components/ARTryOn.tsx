@@ -1,11 +1,14 @@
-import { useRef, useEffect, useState, useCallback } from "react";
+import { useRef, useEffect, useState, useCallback, lazy, Suspense } from "react";
 import { motion } from "framer-motion";
-import { X, Camera, Shuffle, AlertCircle, Loader2, ScanFace, RotateCw } from "lucide-react";
+import { X, Camera, Shuffle, AlertCircle, Loader2, ScanFace, RotateCw, Box, Smartphone } from "lucide-react";
 import {
   calculateHeadPose,
   yawToFrameIndex,
   type HeadPose,
 } from "@/utils/headPose";
+
+// 懒加载 3D 预览组件（减少首屏体积）
+const Wig3DViewer = lazy(() => import("@/components/Wig3DViewer"));
 
 interface ARTryOnProps {
   onClose: () => void;
@@ -49,6 +52,8 @@ export default function ARTryOn({ onClose }: ARTryOnProps) {
   const [errorMsg, setErrorMsg] = useState("");
   const [currentWig, setCurrentWig] = useState(0);
   const [faceDetected, setFaceDetected] = useState(false);
+  // 模式：AR 试戴 (ar) 或 3D 自由预览 (3d)
+  const [mode, setMode] = useState<"ar" | "3d">("ar");
   const [headPose, setHeadPose] = useState<HeadPose>({ yaw: 0, pitch: 0, roll: 0 });
   const [currentFrame, setCurrentFrame] = useState(1); // 默认正面
 
@@ -101,8 +106,9 @@ export default function ARTryOn({ onClose }: ARTryOnProps) {
     }
   }, []);
 
-  // 初始化 MediaPipe Face Mesh
+  // 初始化 MediaPipe Face Mesh — 仅在 AR 模式下启动
   useEffect(() => {
+    if (mode !== "ar") return;
     let cancelled = false;
 
     const initFaceMesh = async () => {
@@ -178,7 +184,7 @@ export default function ARTryOn({ onClose }: ARTryOnProps) {
         stream.getTracks().forEach((t) => t.stop());
       }
     };
-  }, [loadWigImages]);
+  }, [loadWigImages, mode]);
 
   // Canvas 渲染循环 — 绘制视频帧 + 多角度假发叠加
   useEffect(() => {
@@ -328,24 +334,57 @@ export default function ARTryOn({ onClose }: ARTryOnProps) {
         {/* Header */}
         <div className="flex items-center justify-between p-4 border-b border-white/10">
           <div className="flex items-center gap-2">
-            <Camera className="w-5 h-5 text-[var(--neon-cyan)]" />
-            <span className="text-sm font-medium text-white">AR 虚拟试戴</span>
-            {faceDetected && (
+            {mode === "ar" ? (
+              <Camera className="w-5 h-5 text-[var(--neon-cyan)]" />
+            ) : (
+              <Box className="w-5 h-5 text-[var(--neon-purple)]" />
+            )}
+            <span className="text-sm font-medium text-white">
+              {mode === "ar" ? "AR 虚拟试戴" : "3D 自由预览"}
+            </span>
+            {mode === "ar" && faceDetected && (
               <span className="flex items-center gap-1 text-xs text-[var(--neon-cyan)]">
                 <span className="w-1.5 h-1.5 rounded-full bg-[var(--neon-cyan)] animate-pulse" />
                 已识别
               </span>
             )}
           </div>
-          <button
-            onClick={onClose}
-            className="w-8 h-8 rounded-lg flex items-center justify-center bg-white/5 hover:bg-white/10 transition-colors"
-          >
-            <X className="w-4 h-4 text-white" />
-          </button>
+
+          {/* 模式切换 */}
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => setMode("ar")}
+              className={`flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-medium transition-all ${
+                mode === "ar"
+                  ? "bg-gradient-to-r from-[var(--neon-purple)] to-[var(--neon-cyan)] text-white"
+                  : "bg-white/5 text-[var(--muted-foreground)] hover:bg-white/10"
+              }`}
+            >
+              <Smartphone className="w-3.5 h-3.5" />
+              <span className="hidden sm:inline">AR 试戴</span>
+            </button>
+            <button
+              onClick={() => setMode("3d")}
+              className={`flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-medium transition-all ${
+                mode === "3d"
+                  ? "bg-gradient-to-r from-[var(--neon-purple)] to-[var(--neon-cyan)] text-white"
+                  : "bg-white/5 text-[var(--muted-foreground)] hover:bg-white/10"
+              }`}
+            >
+              <Box className="w-3.5 h-3.5" />
+              <span className="hidden sm:inline">3D 预览</span>
+            </button>
+            <button
+              onClick={onClose}
+              className="w-8 h-8 rounded-lg flex items-center justify-center bg-white/5 hover:bg-white/10 transition-colors ml-1"
+            >
+              <X className="w-4 h-4 text-white" />
+            </button>
+          </div>
         </div>
 
-        {/* Camera + Canvas viewport */}
+        {/* Viewport — AR 模式 */}
+        {mode === "ar" && (
         <div className="relative aspect-[3/4] bg-black overflow-hidden" ref={containerRef}>
           <video
             ref={videoRef}
@@ -413,9 +452,29 @@ export default function ARTryOn({ onClose }: ARTryOnProps) {
             />
           )}
         </div>
+        )}
+
+        {/* Viewport — 3D 预览模式 */}
+        {mode === "3d" && (
+        <div className="relative aspect-[3/4] bg-black overflow-hidden">
+          <Suspense
+            fallback={
+              <div className="absolute inset-0 flex flex-col items-center justify-center">
+                <Loader2 className="w-10 h-10 text-[var(--neon-purple)] animate-spin mb-3" />
+                <span className="text-sm text-[var(--muted-foreground)]">正在加载 3D 引擎...</span>
+              </div>
+            }
+          >
+            <Wig3DViewer
+              wigId={WIG_STYLES[currentWig].id}
+              wigName={WIG_STYLES[currentWig].name}
+            />
+          </Suspense>
+        </div>
+        )}
 
         {/* Wig style selector */}
-        {status === "running" && (
+        {(mode === "3d" || status === "running") && (
           <div className="p-4">
             <div className="flex items-center justify-between mb-3">
               <div className="flex items-center gap-2">
@@ -451,9 +510,14 @@ export default function ARTryOn({ onClose }: ARTryOnProps) {
             </div>
 
             {/* 提示 */}
-            {WIG_STYLES[currentWig].multiAngle && (
+            {mode === "ar" && WIG_STYLES[currentWig].multiAngle && (
               <p className="text-[10px] text-[var(--muted-foreground)] mt-2 text-center">
                 转动头部可查看不同角度效果（左 / 正面 / 右）
+              </p>
+            )}
+            {mode === "3d" && (
+              <p className="text-[10px] text-[var(--muted-foreground)] mt-2 text-center">
+                拖拽旋转查看 360° 细节 · 滚轮缩放
               </p>
             )}
           </div>
