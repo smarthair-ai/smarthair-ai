@@ -3,6 +3,6 @@
   "sub_project_type": "",
   "name": "SmartHair AI",
   "app_slug": "smarthair-ai",
-  "version_description": "改为静态照片试戴模式含融合算法",
+  "version_description": "新增拍照试戴AR模式",
   "preview_type": "pc"
 }
