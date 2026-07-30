@@ -6,6 +6,7 @@ import {
   DEFAULT_ADJUST,
   type WigAdjustParams,
 } from "@/utils/wigPosition";
+import { drawWigBlend } from "@/utils/wigRender";
 
 // 懒加载 360° 预览组件
 const Wig360Viewer = lazy(() => import("@/components/Wig360Viewer"));
@@ -14,7 +15,7 @@ interface ARTryOnProps {
   onClose: () => void;
 }
 
-const WIG_STYLES = [
+export const WIG_STYLES = [
   { id: "bangs", name: "空气刘海", icon: "✂️", multiAngle: true },
   { id: "curly", name: "羊毛卷", icon: "🌀", multiAngle: true },
   { id: "short-layered", name: "层次短发", icon: "✨", multiAngle: true },
@@ -24,7 +25,7 @@ const WIG_STYLES = [
   { id: "wolf-cut", name: "高层次狼尾长发", icon: "🐺", multiAngle: true },
 ];
 
-const ANGLE_SUFFIXES = ["left", "front", "right"];
+export const ANGLE_SUFFIXES = ["left", "front", "right"];
 
 export default function ARTryOn({ onClose }: ARTryOnProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -143,62 +144,7 @@ export default function ARTryOn({ onClose }: ARTryOnProps) {
 
     if (!wigImg) return;
 
-    const w = transform.baseWidth;
-    const h = transform.baseHeight;
-
-    // ===== 图像融合：阴影 + 高斯模糊边缘 + 色调匹配 =====
-
-    // 1. 先绘制投影阴影（假发下方的阴影，让它有立体感）
-    ctx.save();
-    ctx.translate(transform.x, transform.y);
-    ctx.rotate(transform.rotation);
-    ctx.scale(transform.scaleX, transform.scaleY);
-
-    // 阴影：偏移 + 模糊
-    ctx.shadowColor = "rgba(0, 0, 0, 0.4)";
-    ctx.shadowBlur = 20;
-    ctx.shadowOffsetX = 3;
-    ctx.shadowOffsetY = 8;
-    ctx.globalAlpha = 0.5;
-
-    // 绘制假发形状作为阴影底（用假发图片的轮廓）
-    ctx.drawImage(wigImg, -w / 2, -h / 2, w, h);
-    ctx.restore();
-
-    // 2. 绘制假发本体（带边缘模糊）
-    ctx.save();
-    ctx.translate(transform.x, transform.y);
-    ctx.rotate(transform.rotation);
-    ctx.scale(transform.scaleX, transform.scaleY);
-
-    // 用 filter 做边缘高斯模糊
-    // blur 只影响边缘几像素，让假发边缘和皮肤自然过渡
-    ctx.filter = "blur(1.5px)";
-    ctx.globalAlpha = 0.95;
-    ctx.drawImage(wigImg, -w / 2, -h / 2, w, h);
-
-    // 再绘制一次清晰版本，但用 mask 让中心清晰边缘模糊
-    ctx.filter = "none";
-    ctx.globalAlpha = 0.9;
-    ctx.drawImage(wigImg, -w / 2, -h / 2, w, h);
-
-    ctx.restore();
-
-    // 3. 底部渐变遮罩（让假发底部和额头过渡更自然）
-    ctx.save();
-    ctx.translate(transform.x, transform.y);
-    ctx.rotate(transform.rotation);
-    ctx.scale(transform.scaleX, transform.scaleY);
-
-    // 在假发底部画一条渐变，从透明到肤色混合
-    const grad = ctx.createLinearGradient(0, h * 0.2, 0, h * 0.5);
-    grad.addColorStop(0, "rgba(0, 0, 0, 0)");
-    grad.addColorStop(1, "rgba(0, 0, 0, 0.15)");
-    ctx.globalCompositeOperation = "multiply";
-    ctx.fillStyle = grad;
-    ctx.fillRect(-w / 2, h * 0.2, w, h * 0.3);
-
-    ctx.restore();
+    drawWigBlend(ctx, wigImg, transform);
 
   }, [currentWig]);
 

@@ -15,6 +15,7 @@ import {
 import { demoFaces, demoHairTypes, recommendations } from "@/data/content";
 import CameraScan from "@/components/CameraScan";
 import ARTryOn from "@/components/ARTryOn";
+import DemoTryOn from "@/components/DemoTryOn";
 
 type Step = 0 | 1 | 2 | 3;
 
@@ -23,7 +24,6 @@ export default function DemoSection() {
   const [faceShape, setFaceShape] = useState<string | null>(null);
   const [hairType, setHairType] = useState<string | null>(null);
   const [analyzing, setAnalyzing] = useState(false);
-  const [arView, setArView] = useState(0);
   const [showCamera, setShowCamera] = useState(false);
   const [showAR, setShowAR] = useState(false);
 
@@ -51,7 +51,6 @@ export default function DemoSection() {
     setStep(0);
     setFaceShape(null);
     setHairType(null);
-    setArView(0);
   };
 
   const recs =
@@ -64,8 +63,6 @@ export default function DemoSection() {
     { num: 2, label: "AI推荐", icon: Sparkles },
     { num: 3, label: "AR试戴", icon: Glasses },
   ];
-
-  const arViews = ["正面视角", "45°侧面", "后脑视角"];
 
   return (
     <section id="demo" className="relative py-20 md:py-28 overflow-hidden">
@@ -395,93 +392,13 @@ export default function DemoSection() {
                       <Glasses className="w-5 h-5 text-[var(--neon-cyan)]" />
                       <span className="text-sm font-medium text-white">AR 虚拟试戴</span>
                     </div>
-                    <span className="text-xs text-[var(--neon-cyan)] flex items-center gap-1">
+                      <span className="text-xs text-[var(--neon-cyan)] flex items-center gap-1">
                       <span className="w-1.5 h-1.5 rounded-full bg-[var(--neon-cyan)] animate-pulse" />
-                      实时渲染
-                    </span>
-                  </div>
-
-                  {/* View switcher */}
-                  <div className="flex gap-2 mb-5">
-                    {arViews.map((view, i) => (
-                      <button
-                        key={view}
-                        onClick={() => setArView(i)}
-                        className={`flex-1 px-3 py-2 rounded-xl text-sm font-medium transition-all ${
-                          arView === i
-                            ? "bg-gradient-to-r from-[var(--neon-purple)] to-[var(--neon-cyan)] text-white"
-                            : "bg-white/5 text-[var(--muted-foreground)]"
-                        }`}
-                      >
-                        {view}
-                      </button>
-                    ))}
-                  </div>
-
-                  {/* AR Canvas */}
-                  <div className="relative aspect-[4/3] sm:aspect-[16/10] rounded-xl overflow-hidden bg-gradient-to-b from-[oklch(0.18_0.01_280)] to-[oklch(0.12_0.005_280)]">
-                    <div className="absolute inset-0 grid-bg opacity-30" />
-                    <div className="absolute left-0 right-0 h-0.5 bg-gradient-to-r from-transparent via-[var(--neon-cyan)] to-transparent animate-scan" />
-
-                    <AnimatePresence mode="wait">
-                      <motion.div
-                        key={arView}
-                        initial={{ opacity: 0, scale: 0.95 }}
-                        animate={{ opacity: 1, scale: 1 }}
-                        exit={{ opacity: 0, scale: 0.95 }}
-                        transition={{ duration: 0.3 }}
-                        className="absolute inset-0 flex items-center justify-center"
-                      >
-                        <svg viewBox="0 0 200 120" className="w-1/2">
-                          <defs>
-                            <linearGradient id="demoHairGrad" x1="0" y1="0" x2="1" y2="1">
-                              <stop offset="0%" stopColor="oklch(0.65 0.25 300)" />
-                              <stop offset="100%" stopColor="oklch(0.70 0.18 200)" />
-                            </linearGradient>
-                          </defs>
-                          {arView === 0 && (
-                            <>
-                              <path d="M55 40 Q65 8 100 5 Q135 8 145 40 L150 60 Q135 45 115 42 Q110 30 100 28 Q90 30 85 42 Q65 45 50 60 Z" fill="url(#demoHairGrad)" opacity="0.9" />
-                              <ellipse cx="100" cy="72" rx="25" ry="30" fill="oklch(0.45 0.02 50)" opacity="0.3" />
-                              <path d="M72 50 Q77 65 85 68 M128 50 Q123 65 115 68" stroke="url(#demoHairGrad)" strokeWidth="2.5" fill="none" opacity="0.8" />
-                            </>
-                          )}
-                          {arView === 1 && (
-                            <>
-                              <path d="M55 35 Q65 3 105 5 Q130 8 135 40 L140 95 Q135 108 115 110 L85 110 Q68 104 63 90 L58 60 Z" fill="url(#demoHairGrad)" opacity="0.9" />
-                              <path d="M95 40 Q108 45 112 62 Q115 80 108 92 Q103 100 95 102" stroke="oklch(0.45 0.02 50)" strokeWidth="1.5" fill="oklch(0.45 0.02 50)" opacity="0.25" />
-                            </>
-                          )}
-                          {arView === 2 && (
-                            <ellipse cx="100" cy="60" rx="38" ry="45" fill="url(#demoHairGrad)" opacity="0.9" />
-                          )}
-                        </svg>
-                      </motion.div>
-                    </AnimatePresence>
-
-                    {/* AR markers */}
-                    <div className="absolute top-3 left-3 flex items-center gap-1 px-2 py-1 rounded-md bg-black/50 backdrop-blur">
-                      <ScanFace className="w-3 h-3 text-[var(--neon-cyan)]" />
-                      <span className="text-[10px] text-white">
-                        {demoFaces.find(f => f.id === faceShape)?.label}
+                      拍照上传试戴
                       </span>
-                    </div>
-                    <div className="absolute top-3 right-3 px-2 py-1 rounded-md bg-black/50 backdrop-blur">
-                      <span className="text-[10px] text-[var(--neon-purple)]">
-                        匹配度 {recs[0]?.score}%
-                      </span>
-                    </div>
-
-                    {/* Hairstyle name */}
-                    <div className="absolute bottom-3 left-3 right-3">
-                      <div className="px-3 py-2 rounded-lg bg-black/50 backdrop-blur">
-                        <p className="text-xs text-white font-medium">{recs[0]?.name}</p>
-                        <p className="text-[10px] text-[var(--muted-foreground)] mt-0.5">
-                          {arViews[arView]} · {recs[0]?.reason}
-                        </p>
-                      </div>
-                    </div>
                   </div>
+
+                  <DemoTryOn initialWigName={recs[0]?.name} />
                 </div>
 
                 {/* Params + Actions */}
