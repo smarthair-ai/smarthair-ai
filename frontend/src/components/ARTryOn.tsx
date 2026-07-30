@@ -24,6 +24,7 @@ interface ARTryOnProps {
 const WIG_STYLES = [
   { id: "bangs", name: "空气刘海", icon: "✂️", multiAngle: true },
   { id: "curly", name: "羊毛卷", icon: "🌀", multiAngle: true },
+  { id: "short-layered", name: "层次短发", icon: "✨", multiAngle: true },
   { id: "bob", name: "波波头", icon: "💇", multiAngle: false },
   { id: "long", name: "长直发", icon: "👩", multiAngle: false },
   { id: "french-bob", name: "法式慵懒波波烫", icon: "🇫🇷", multiAngle: true },
