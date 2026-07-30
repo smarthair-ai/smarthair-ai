@@ -113,7 +113,23 @@ export default function ARTryOn({ onClose }: ARTryOnProps) {
     let cancelled = false;
 
     const initFaceMesh = async () => {
+      // 先检测摄像头是否可用
+      if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+        if (cancelled) return;
+        setErrorMsg("当前环境不支持摄像头访问");
+        setStatus("error");
+        return;
+      }
+
       try {
+        // 先请求摄像头权限
+        const stream = await navigator.mediaDevices.getUserMedia({
+          video: { facingMode: "user", width: 640, height: 480 },
+          audio: false,
+        });
+        // 立即释放，让 MediaPipe Camera 重新获取
+        stream.getTracks().forEach((t) => t.stop());
+
         const FaceMesh = (await import("@mediapipe/face_mesh")).FaceMesh;
         const Camera = (await import("@mediapipe/camera_utils")).Camera;
 
@@ -431,12 +447,22 @@ export default function ARTryOn({ onClose }: ARTryOnProps) {
 
           {/* Error state */}
           {status === "error" && (
-            <div className="absolute inset-0 flex flex-col items-center justify-center p-6 text-center">
+            <div className="absolute inset-0 flex flex-col items-center justify-center p-6 text-center bg-gradient-to-b from-[oklch(0.15_0.01_280)] to-[oklch(0.08_0.005_280)]">
               <AlertCircle className="w-12 h-12 text-orange-400 mb-3" />
-              <p className="text-sm text-white mb-2">{errorMsg}</p>
+              <p className="text-sm text-white mb-1">摄像头不可用</p>
+              <p className="text-xs text-[var(--muted-foreground)] mb-4 max-w-xs">
+                {errorMsg}。你可以切换到 360° 预览模式查看发型效果。
+              </p>
+              <button
+                onClick={() => setMode("3d")}
+                className="flex items-center gap-2 px-6 py-2.5 rounded-xl bg-gradient-to-r from-[var(--neon-purple)] to-[var(--neon-cyan)] text-white text-sm font-medium hover:shadow-[0_0_20px_oklch(0.65_0.25_300/0.3)] transition-all"
+              >
+                <Box className="w-4 h-4" />
+                切换到 360° 预览
+              </button>
               <button
                 onClick={onClose}
-                className="mt-2 px-4 py-2 rounded-xl glass-card text-white text-sm font-medium"
+                className="mt-3 text-xs text-[var(--muted-foreground)] hover:text-white transition-colors"
               >
                 关闭
               </button>

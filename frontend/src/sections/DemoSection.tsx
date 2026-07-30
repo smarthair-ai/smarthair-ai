@@ -145,24 +145,29 @@ export default function DemoSection() {
                 exit={{ opacity: 0, y: -20 }}
                 className="space-y-6"
               >
-                {/* Camera scan button */}
-                <div className="flex justify-center">
+                {/* Quick experience — AR & 360° preview */}
+                <div className="flex flex-col sm:flex-row justify-center gap-3">
+                  <button
+                    onClick={() => setShowAR(true)}
+                    className="flex items-center justify-center gap-2 px-8 py-4 rounded-xl bg-gradient-to-r from-[var(--neon-purple)] to-[var(--neon-cyan)] text-white font-bold hover:shadow-[0_0_30px_oklch(0.65_0.25_300/0.4)] transition-all duration-300"
+                  >
+                    <Camera className="w-5 h-5" />
+                    <span>立即体验 AR 试戴</span>
+                    <span className="text-xs px-2 py-0.5 rounded-full bg-white/20">HOT</span>
+                  </button>
                   <button
                     onClick={() => setShowCamera(true)}
-                    className="flex items-center gap-2 px-6 py-3 rounded-xl glass-card border border-[var(--neon-cyan)]/30 text-white font-medium hover:border-[var(--neon-cyan)]/60 hover:shadow-[0_0_20px_oklch(0.70_0.18_200/0.2)] transition-all duration-300"
+                    className="flex items-center justify-center gap-2 px-6 py-4 rounded-xl glass-card border border-[var(--neon-cyan)]/30 text-white font-medium hover:border-[var(--neon-cyan)]/60 transition-all duration-300"
                   >
-                    <Camera className="w-4 h-4 text-[var(--neon-cyan)]" />
-                    <span>摄像头智能检测</span>
-                    <span className="text-xs text-[var(--neon-cyan)] px-2 py-0.5 rounded-full bg-[var(--neon-cyan)]/10">
-                      NEW
-                    </span>
+                    <ScanFace className="w-4 h-4 text-[var(--neon-cyan)]" />
+                    <span>摄像头智能检测脸型</span>
                   </button>
                 </div>
 
                 {/* Divider */}
                 <div className="flex items-center gap-3">
                   <div className="flex-1 h-px bg-white/10" />
-                  <span className="text-xs text-[var(--muted-foreground)]">或手动选择</span>
+                  <span className="text-xs text-[var(--muted-foreground)]">或手动选择脸型发质</span>
                   <div className="flex-1 h-px bg-white/10" />
                 </div>
 

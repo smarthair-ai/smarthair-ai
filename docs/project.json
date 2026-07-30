@@ -3,6 +3,6 @@
   "sub_project_type": "",
   "name": "SmartHair AI",
   "app_slug": "smarthair-ai",
-  "version_description": "重构 360 度预览为纯帧切换模式",
+  "version_description": "优化 AR 入口位置和错误处理",
   "preview_type": "pc"
 }
