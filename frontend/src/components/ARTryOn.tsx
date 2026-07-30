@@ -1,32 +1,19 @@
 import { useRef, useEffect, useState, useCallback, lazy, Suspense } from "react";
 import { motion } from "framer-motion";
-import { X, Camera, Shuffle, AlertCircle, Loader2, ScanFace, RotateCw, Box, Smartphone, SlidersHorizontal } from "lucide-react";
-import {
-  calculateHeadPose,
-  yawToFrameIndex,
-  type HeadPose,
-} from "@/utils/headPose";
+import { X, Camera, Shuffle, AlertCircle, Loader2, ScanFace, RotateCw, Box, Upload, Image as ImageIcon, Download, RefreshCw } from "lucide-react";
 import {
   calculateWigTransformRaw,
-  WigSmoother,
   DEFAULT_ADJUST,
   type WigAdjustParams,
 } from "@/utils/wigPosition";
 
-// 懒加载 360° 预览组件（减少首屏体积）
+// 懒加载 360° 预览组件
 const Wig360Viewer = lazy(() => import("@/components/Wig360Viewer"));
 
 interface ARTryOnProps {
   onClose: () => void;
 }
 
-/**
- * 假发样式列表
- *
- * multiAngle: 是否启用多角度序列帧模式
- * - true: 加载 {id}-left.png, {id}-front.png, {id}-right.png 三张图
- * - false: 加载单张 {id}.png（兼容旧模式）
- */
 const WIG_STYLES = [
   { id: "bangs", name: "空气刘海", icon: "✂️", multiAngle: true },
   { id: "curly", name: "羊毛卷", icon: "🌀", multiAngle: true },
@@ -37,48 +24,37 @@ const WIG_STYLES = [
   { id: "wolf-cut", name: "高层次狼尾长发", icon: "🐺", multiAngle: true },
 ];
 
-// 多角度帧定义（3 帧：左 / 正面 / 右）
 const ANGLE_SUFFIXES = ["left", "front", "right"];
-const FRAME_COUNT = 3;
 
 export default function ARTryOn({ onClose }: ARTryOnProps) {
-  const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  const containerRef = useRef<HTMLDivElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
   const faceMeshRef = useRef<any>(null);
-  const cameraRef = useRef<any>(null);
-  const rafRef = useRef<number>(0);
+
+  // 用户上传的照片
+  const photoRef = useRef<HTMLImageElement | null>(null);
+  // 假发图片缓存
+  const wigImagesRef = useRef<HTMLImageElement[][]>([]);
+  const singleWigImgRef = useRef<HTMLImageElement | null>(null);
+  // 检测到的人脸关键点
   const landmarksRef = useRef<any[]>([]);
 
-  // 多角度图片缓存：wigImagesRef[currentWig][frameIndex]
-  const wigImagesRef = useRef<HTMLImageElement[][]>([]);
-  // 单张图片缓存（兼容旧模式）
-  const singleWigImgRef = useRef<HTMLImageElement | null>(null);
-
-  const [status, setStatus] = useState<"loading" | "running" | "error">("loading");
+  const [status, setStatus] = useState<"idle" | "analyzing" | "ready" | "error" | "no-face">("idle");
   const [errorMsg, setErrorMsg] = useState("");
   const [currentWig, setCurrentWig] = useState(0);
-  const [faceDetected, setFaceDetected] = useState(false);
-  // 模式：AR 试戴 (ar) 或 3D 自由预览 (3d)
-  const [mode, setMode] = useState<"ar" | "3d">("ar");
-  const [headPose, setHeadPose] = useState<HeadPose>({ yaw: 0, pitch: 0, roll: 0 });
-  const [currentFrame, setCurrentFrame] = useState(1); // 默认正面
+  const [mode, setMode] = useState<"photo" | "3d">("photo");
 
-  // 调试参数（临时滑动条）
+  // 调试参数
   const [adjust, setAdjust] = useState<WigAdjustParams>(DEFAULT_ADJUST);
   const [showDebug, setShowDebug] = useState(false);
   const adjustRef = useRef(adjust);
   adjustRef.current = adjust;
 
-  // 阻尼平滑器
-  const smootherRef = useRef(new WigSmoother(0.3));
-
-  // 加载假发图片（支持多角度和单张两种模式）
+  // 加载假发图片
   const loadWigImages = useCallback((wigIndex: number) => {
     const wig = WIG_STYLES[wigIndex];
 
     if (wig.multiAngle) {
-      // 多角度模式：加载 3 张图
       const images: HTMLImageElement[] = [];
       let loadedCount = 0;
 
@@ -91,17 +67,17 @@ export default function ARTryOn({ onClose }: ARTryOnProps) {
           loadedCount++;
           if (loadedCount === ANGLE_SUFFIXES.length) {
             wigImagesRef.current[wigIndex] = images;
+            renderPhoto();
           }
         };
         img.onerror = () => {
-          // 如果多角度图片加载失败，回退到单张模式
           loadedCount++;
           const fallback = new Image();
           fallback.crossOrigin = "anonymous";
           fallback.src = `/wigs/${wig.id}.png`;
           fallback.onload = () => {
-            // 三帧都用同一张图
             wigImagesRef.current[wigIndex] = [fallback, fallback, fallback];
+            renderPhoto();
           };
           fallback.onerror = () => {
             wigImagesRef.current[wigIndex] = [];
@@ -109,12 +85,12 @@ export default function ARTryOn({ onClose }: ARTryOnProps) {
         };
       });
     } else {
-      // 单张模式
       const img = new Image();
       img.crossOrigin = "anonymous";
       img.src = `/wigs/${wig.id}.png`;
       img.onload = () => {
         singleWigImgRef.current = img;
+        renderPhoto();
       };
       img.onerror = () => {
         singleWigImgRef.current = null;
@@ -122,202 +98,169 @@ export default function ARTryOn({ onClose }: ARTryOnProps) {
     }
   }, []);
 
-  // 初始化 MediaPipe Face Mesh — 仅在 AR 模式下启动
-  useEffect(() => {
-    if (mode !== "ar") return;
-    let cancelled = false;
-
-    const initFaceMesh = async () => {
-      // 先检测摄像头是否可用
-      if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-        if (cancelled) return;
-        setErrorMsg("当前环境不支持摄像头访问");
-        setStatus("error");
-        return;
-      }
-
-      try {
-        // 先请求摄像头权限
-        const stream = await navigator.mediaDevices.getUserMedia({
-          video: { facingMode: "user", width: 640, height: 480 },
-          audio: false,
-        });
-        // 立即释放，让 MediaPipe Camera 重新获取
-        stream.getTracks().forEach((t) => t.stop());
-
-        const FaceMesh = (await import("@mediapipe/face_mesh")).FaceMesh;
-        const Camera = (await import("@mediapipe/camera_utils")).Camera;
-
-        if (cancelled) return;
-
-        const faceMesh = new FaceMesh({
-          locateFile: (file: string) =>
-            `https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/${file}`,
-        });
-
-        faceMesh.setOptions({
-          maxNumFaces: 1,
-          refineLandmarks: true,
-          minDetectionConfidence: 0.5,
-          minTrackingConfidence: 0.5,
-        });
-
-        faceMesh.onResults((results: any) => {
-          landmarksRef.current = results.multiFaceLandmarks?.[0] || [];
-          setFaceDetected(landmarksRef.current.length > 0);
-        });
-
-        faceMeshRef.current = faceMesh;
-
-        if (videoRef.current) {
-          const camera = new Camera(videoRef.current, {
-            onFrame: async () => {
-              if (faceMeshRef.current) {
-                await faceMeshRef.current.send({ image: videoRef.current });
-              }
-            },
-            width: 640,
-            height: 480,
-            facingMode: "user",
-          });
-
-          cameraRef.current = camera;
-          await camera.start();
-          if (!cancelled) setStatus("running");
-        }
-
-        // 加载默认假发图片
-        loadWigImages(0);
-      } catch (err) {
-        if (cancelled) return;
-        const e = err as Error;
-        if (e.message.includes("Permission") || e.message.includes("denied")) {
-          setErrorMsg("摄像头权限被拒绝，请在浏览器设置中允许访问");
-        } else {
-          setErrorMsg("摄像头启动失败，请检查设备或权限设置");
-        }
-        setStatus("error");
-      }
-    };
-
-    initFaceMesh();
-
-    return () => {
-      cancelled = true;
-      cancelAnimationFrame(rafRef.current);
-      if (cameraRef.current) {
-        try { cameraRef.current.stop(); } catch {}
-      }
-      if (faceMeshRef.current) {
-        try { faceMeshRef.current.close(); } catch {}
-      }
-      if (videoRef.current?.srcObject) {
-        const stream = videoRef.current.srcObject as MediaStream;
-        stream.getTracks().forEach((t) => t.stop());
-      }
-    };
-  }, [loadWigImages, mode]);
-
-  // Canvas 渲染循环 — 绘制视频帧 + 多角度假发叠加
-  useEffect(() => {
-    if (status !== "running") return;
-
+  // ===== 核心渲染：静态照片 + 假发融合 =====
+  const renderPhoto = useCallback(() => {
     const canvas = canvasRef.current;
-    const video = videoRef.current;
-    if (!canvas || !video) return;
+    const photo = photoRef.current;
+    if (!canvas || !photo) return;
 
     const ctx = canvas.getContext("2d");
     if (!ctx) return;
 
-    // 平滑插值：避免帧切换闪烁
-    let smoothYaw = 0;
-    const SMOOTH_FACTOR = 0.3;
-    let lastFrameUpdate = 0;
+    // 设置画布尺寸为照片尺寸
+    const pw = photo.naturalWidth;
+    const ph = photo.naturalHeight;
+    canvas.width = pw;
+    canvas.height = ph;
 
-    const render = () => {
-      if (video.readyState >= 2) {
-        const vw = video.videoWidth || 640;
-        const vh = video.videoHeight || 480;
-        canvas.width = vw;
-        canvas.height = vh;
+    // 绘制原始照片
+    ctx.drawImage(photo, 0, 0, pw, ph);
 
-        // 镜像绘制视频帧
-        ctx.save();
-        ctx.scale(-1, 1);
-        ctx.drawImage(video, -vw, 0, vw, vh);
-        ctx.restore();
+    const lm = landmarksRef.current;
+    if (lm.length === 0) return;
 
-        const lm = landmarksRef.current;
-        if (lm.length > 0) {
-          // 计算头部姿态
-          const pose = calculateHeadPose(lm);
+    // 计算假发变换参数（静态模式不需要平滑器）
+    const transform = calculateWigTransformRaw(lm, pw, ph, adjustRef.current, false);
+    if (!transform) return;
 
-          // 平滑 Yaw 值（指数移动平均）
-          smoothYaw = smoothYaw * (1 - SMOOTH_FACTOR) + pose.yaw * SMOOTH_FACTOR;
+    // 获取假发图片
+    const wig = WIG_STYLES[currentWig];
+    let wigImg: HTMLImageElement | null = null;
 
-          // 更新 UI 显示（节流，每 100ms 更新一次）
-          const now = Date.now();
-          if (now - lastFrameUpdate > 100) {
-            lastFrameUpdate = now;
-            setHeadPose(pose);
+    if (wig.multiAngle) {
+      // 静态照片用正面图（索引 1）
+      const images = wigImagesRef.current[currentWig];
+      wigImg = images?.[1] || images?.[0] || null;
+    } else {
+      wigImg = singleWigImgRef.current;
+    }
 
-            // 计算当前应显示的帧索引
-            const frameIdx = yawToFrameIndex(smoothYaw, FRAME_COUNT);
-            setCurrentFrame(frameIdx);
-          }
+    if (!wigImg) return;
 
-          // ===== 假发定位 v3 — 动态锚点 + 透视 + 阻尼平滑 =====
-          const rawTransform = calculateWigTransformRaw(
-            lm, vw, vh, adjustRef.current, true
-          );
+    const w = transform.baseWidth;
+    const h = transform.baseHeight;
 
-          if (!rawTransform) return;
+    // ===== 图像融合：阴影 + 高斯模糊边缘 + 色调匹配 =====
 
-          // 阻尼平滑
-          const transform = smootherRef.current.update(rawTransform);
+    // 1. 先绘制投影阴影（假发下方的阴影，让它有立体感）
+    ctx.save();
+    ctx.translate(transform.x, transform.y);
+    ctx.rotate(transform.rotation);
+    ctx.scale(transform.scaleX, transform.scaleY);
 
-          const wig = WIG_STYLES[currentWig];
+    // 阴影：偏移 + 模糊
+    ctx.shadowColor = "rgba(0, 0, 0, 0.4)";
+    ctx.shadowBlur = 20;
+    ctx.shadowOffsetX = 3;
+    ctx.shadowOffsetY = 8;
+    ctx.globalAlpha = 0.5;
 
-          // 绘制函数 — 应用 scaleX/scaleY 透视 + rotation
-          const drawWig = (img: HTMLImageElement) => {
-            const w = transform.baseWidth;
-            const h = transform.baseHeight;
+    // 绘制假发形状作为阴影底（用假发图片的轮廓）
+    ctx.drawImage(wigImg, -w / 2, -h / 2, w, h);
+    ctx.restore();
 
-            ctx.save();
-            // 移到假发中心
-            ctx.translate(transform.x, transform.y);
-            // Roll 旋转
-            ctx.rotate(transform.rotation);
-            // 透视缩放：先 X 压缩（Yaw），再 Y 缩放（Pitch）
-            ctx.scale(transform.scaleX, transform.scaleY);
-            ctx.globalAlpha = 0.92;
-            // 绘制假发（中心对齐）
-            ctx.drawImage(img, -w / 2, -h / 2, w, h);
-            ctx.restore();
-          };
+    // 2. 绘制假发本体（带边缘模糊）
+    ctx.save();
+    ctx.translate(transform.x, transform.y);
+    ctx.rotate(transform.rotation);
+    ctx.scale(transform.scaleX, transform.scaleY);
 
-          if (wig.multiAngle) {
-            const frameIdx = yawToFrameIndex(smoothYaw, FRAME_COUNT);
-            const images = wigImagesRef.current[currentWig];
+    // 用 filter 做边缘高斯模糊
+    // blur 只影响边缘几像素，让假发边缘和皮肤自然过渡
+    ctx.filter = "blur(1.5px)";
+    ctx.globalAlpha = 0.95;
+    ctx.drawImage(wigImg, -w / 2, -h / 2, w, h);
 
-            if (images && images[frameIdx]) {
-              drawWig(images[frameIdx]);
-            } else if (images && images[1]) {
-              drawWig(images[1]);
-            }
-          } else {
-            if (singleWigImgRef.current) {
-              drawWig(singleWigImgRef.current);
-            }
-          }
+    // 再绘制一次清晰版本，但用 mask 让中心清晰边缘模糊
+    ctx.filter = "none";
+    ctx.globalAlpha = 0.9;
+    ctx.drawImage(wigImg, -w / 2, -h / 2, w, h);
+
+    ctx.restore();
+
+    // 3. 底部渐变遮罩（让假发底部和额头过渡更自然）
+    ctx.save();
+    ctx.translate(transform.x, transform.y);
+    ctx.rotate(transform.rotation);
+    ctx.scale(transform.scaleX, transform.scaleY);
+
+    // 在假发底部画一条渐变，从透明到肤色混合
+    const grad = ctx.createLinearGradient(0, h * 0.2, 0, h * 0.5);
+    grad.addColorStop(0, "rgba(0, 0, 0, 0)");
+    grad.addColorStop(1, "rgba(0, 0, 0, 0.15)");
+    ctx.globalCompositeOperation = "multiply";
+    ctx.fillStyle = grad;
+    ctx.fillRect(-w / 2, h * 0.2, w, h * 0.3);
+
+    ctx.restore();
+
+  }, [currentWig]);
+
+  // ===== 处理上传/拍照的照片 =====
+  const handlePhoto = useCallback(async (file: File) => {
+    setStatus("analyzing");
+    setErrorMsg("");
+
+    // 读取照片为 Image
+    const url = URL.createObjectURL(file);
+    const img = new Image();
+    img.onload = async () => {
+      photoRef.current = img;
+      URL.revokeObjectURL(url);
+
+      try {
+        // 初始化 MediaPipe Face Mesh（如果还没初始化）
+        if (!faceMeshRef.current) {
+          const FaceMesh = (await import("@mediapipe/face_mesh")).FaceMesh;
+          const faceMesh = new FaceMesh({
+            locateFile: (file: string) =>
+              `https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/${file}`,
+          });
+          faceMesh.setOptions({
+            maxNumFaces: 1,
+            refineLandmarks: true,
+            minDetectionConfidence: 0.5,
+          });
+          faceMeshRef.current = faceMesh;
         }
-      }
-      rafRef.current = requestAnimationFrame(render);
-    };
 
-    rafRef.current = requestAnimationFrame(render);
-    return () => cancelAnimationFrame(rafRef.current);
-  }, [status, currentWig]);
+        // 对照片运行人脸检测
+        faceMeshRef.current.onResults((results: any) => {
+          const landmarks = results.multiFaceLandmarks?.[0] || [];
+
+          if (landmarks.length > 0) {
+            landmarksRef.current = landmarks;
+            setStatus("ready");
+            // 加载默认假发并渲染
+            loadWigImages(0);
+          } else {
+            setStatus("no-face");
+          }
+        });
+
+        await faceMeshRef.current.send({ image: img });
+      } catch (err) {
+        setErrorMsg("人脸检测失败，请换一张正面照片");
+        setStatus("error");
+      }
+    };
+    img.onerror = () => {
+      setErrorMsg("图片加载失败");
+      setStatus("error");
+    };
+    img.src = url;
+  }, [loadWigImages]);
+
+  // 文件选择
+  const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) handlePhoto(file);
+  };
+
+  // 拍照（调用摄像头拍一张）
+  const handleTakePhoto = () => {
+    fileInputRef.current?.click();
+  };
 
   // 切换假发
   const switchWig = (idx: number) => {
@@ -325,8 +268,39 @@ export default function ARTryOn({ onClose }: ARTryOnProps) {
     loadWigImages(idx);
   };
 
-  // 帧方向标签
-  const frameLabel = currentFrame === 0 ? "← 左侧" : currentFrame === 1 ? "正面" : "右侧 →";
+  // 调试参数变化时重新渲染
+  useEffect(() => {
+    if (status === "ready") {
+      renderPhoto();
+    }
+  }, [adjust, status, renderPhoto]);
+
+  // 下载结果
+  const handleDownload = () => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const link = document.createElement("a");
+    link.download = `hairstyle-${WIG_STYLES[currentWig].id}.png`;
+    link.href = canvas.toDataURL("image/png");
+    link.click();
+  };
+
+  // 重置
+  const handleReset = () => {
+    photoRef.current = null;
+    landmarksRef.current = [];
+    setStatus("idle");
+    setAdjust(DEFAULT_ADJUST);
+  };
+
+  // 清理
+  useEffect(() => {
+    return () => {
+      if (faceMeshRef.current) {
+        try { faceMeshRef.current.close(); } catch {}
+      }
+    };
+  }, []);
 
   return (
     <motion.div
@@ -346,34 +320,28 @@ export default function ARTryOn({ onClose }: ARTryOnProps) {
         {/* Header */}
         <div className="flex items-center justify-between p-4 border-b border-white/10">
           <div className="flex items-center gap-2">
-            {mode === "ar" ? (
+            {mode === "photo" ? (
               <Camera className="w-5 h-5 text-[var(--neon-cyan)]" />
             ) : (
               <Box className="w-5 h-5 text-[var(--neon-purple)]" />
             )}
             <span className="text-sm font-medium text-white">
-              {mode === "ar" ? "AR 虚拟试戴" : "360° 自由预览"}
+              {mode === "photo" ? "照片试戴" : "360° 预览"}
             </span>
-            {mode === "ar" && faceDetected && (
-              <span className="flex items-center gap-1 text-xs text-[var(--neon-cyan)]">
-                <span className="w-1.5 h-1.5 rounded-full bg-[var(--neon-cyan)] animate-pulse" />
-                已识别
-              </span>
-            )}
           </div>
 
           {/* 模式切换 */}
           <div className="flex items-center gap-2">
             <button
-              onClick={() => setMode("ar")}
+              onClick={() => setMode("photo")}
               className={`flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-medium transition-all ${
-                mode === "ar"
+                mode === "photo"
                   ? "bg-gradient-to-r from-[var(--neon-purple)] to-[var(--neon-cyan)] text-white"
                   : "bg-white/5 text-[var(--muted-foreground)] hover:bg-white/10"
               }`}
             >
-              <Smartphone className="w-3.5 h-3.5" />
-              <span className="hidden sm:inline">AR 试戴</span>
+              <Camera className="w-3.5 h-3.5" />
+              <span className="hidden sm:inline">照片试戴</span>
             </button>
             <button
               onClick={() => setMode("3d")}
@@ -395,84 +363,112 @@ export default function ARTryOn({ onClose }: ARTryOnProps) {
           </div>
         </div>
 
-        {/* Viewport — AR 模式 */}
-        {mode === "ar" && (
-        <div className="relative aspect-[3/4] bg-black overflow-hidden" ref={containerRef}>
-          <video
-            ref={videoRef}
-            autoPlay
-            playsInline
-            muted
-            className="absolute inset-0 w-full h-full object-cover opacity-0"
-          />
+        {/* Viewport — 照片试戴模式 */}
+        {mode === "photo" && (
+        <div className="relative aspect-[3/4] bg-black overflow-hidden">
           <canvas
             ref={canvasRef}
-            className="absolute inset-0 w-full h-full object-cover"
+            className="absolute inset-0 w-full h-full object-contain"
           />
 
-          {/* Loading state */}
-          {status === "loading" && (
+          {/* 空闲状态 — 上传/拍照入口 */}
+          {status === "idle" && (
+            <div className="absolute inset-0 flex flex-col items-center justify-center gap-4 p-6">
+              <div className="w-20 h-20 rounded-full bg-gradient-to-br from-[var(--neon-purple)]/20 to-[var(--neon-cyan)]/20 flex items-center justify-center mb-2">
+                <ImageIcon className="w-10 h-10 text-[var(--neon-cyan)]" />
+              </div>
+              <p className="text-sm text-white text-center">上传一张正面照片</p>
+              <p className="text-xs text-[var(--muted-foreground)] text-center max-w-xs">
+                AI 会自动检测面部，为你戴上选中的发型
+              </p>
+              <div className="flex gap-3 mt-2">
+                <button
+                  onClick={handleTakePhoto}
+                  className="flex items-center gap-2 px-6 py-3 rounded-xl bg-gradient-to-r from-[var(--neon-purple)] to-[var(--neon-cyan)] text-white text-sm font-medium hover:shadow-[0_0_20px_oklch(0.65_0.25_300/0.3)] transition-all"
+                >
+                  <Upload className="w-4 h-4" />
+                  上传照片
+                </button>
+              </div>
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept="image/*"
+                capture="user"
+                onChange={handleFileSelect}
+                className="hidden"
+              />
+            </div>
+          )}
+
+          {/* 分析中 */}
+          {status === "analyzing" && (
             <div className="absolute inset-0 flex flex-col items-center justify-center">
               <Loader2 className="w-10 h-10 text-[var(--neon-cyan)] animate-spin mb-3" />
-              <span className="text-sm text-[var(--muted-foreground)]">正在加载 AI 模型...</span>
-              <span className="text-xs text-[var(--muted-foreground)] mt-1">首次加载约需 5-10 秒</span>
+              <span className="text-sm text-[var(--muted-foreground)]">AI 正在检测面部...</span>
             </div>
           )}
 
-          {/* No face state */}
-          {status === "running" && !faceDetected && (
-            <div className="absolute top-4 left-1/2 -translate-x-1/2 px-3 py-1.5 rounded-full bg-black/60 backdrop-blur flex items-center gap-2">
-              <ScanFace className="w-4 h-4 text-[var(--neon-purple)] animate-pulse" />
-              <span className="text-xs text-white">请将面部对准画面中央</span>
+          {/* 未检测到人脸 */}
+          {status === "no-face" && (
+            <div className="absolute inset-0 flex flex-col items-center justify-center p-6 text-center">
+              <ScanFace className="w-12 h-12 text-orange-400 mb-3" />
+              <p className="text-sm text-white mb-1">未检测到人脸</p>
+              <p className="text-xs text-[var(--muted-foreground)] mb-4">请使用正面清晰的照片</p>
+              <button
+                onClick={handleReset}
+                className="px-4 py-2 rounded-xl glass-card text-white text-sm font-medium"
+              >
+                重新上传
+              </button>
             </div>
           )}
 
-          {/* Head pose indicator */}
-          {status === "running" && faceDetected && (
-            <div className="absolute top-3 left-3 px-2.5 py-1.5 rounded-lg bg-black/60 backdrop-blur space-y-1">
-              <div className="flex items-center gap-1.5">
-                <RotateCw className="w-3 h-3 text-[var(--neon-cyan)]" />
-                <span className="text-[10px] text-white font-mono">
-                  Yaw: {Math.round(headPose.yaw)}°
-                </span>
-              </div>
-              <div className="text-[10px] text-[var(--neon-cyan)] font-medium">{frameLabel}</div>
-            </div>
-          )}
-
-          {/* Error state */}
+          {/* 错误 */}
           {status === "error" && (
-            <div className="absolute inset-0 flex flex-col items-center justify-center p-6 text-center bg-gradient-to-b from-[oklch(0.15_0.01_280)] to-[oklch(0.08_0.005_280)]">
+            <div className="absolute inset-0 flex flex-col items-center justify-center p-6 text-center">
               <AlertCircle className="w-12 h-12 text-orange-400 mb-3" />
-              <p className="text-sm text-white mb-1">摄像头不可用</p>
-              <p className="text-xs text-[var(--muted-foreground)] mb-4 max-w-xs">
-                {errorMsg}。你可以切换到 360° 预览模式查看发型效果。
-              </p>
+              <p className="text-sm text-white mb-1">出错了</p>
+              <p className="text-xs text-[var(--muted-foreground)] mb-4">{errorMsg}</p>
               <button
-                onClick={() => setMode("3d")}
-                className="flex items-center gap-2 px-6 py-2.5 rounded-xl bg-gradient-to-r from-[var(--neon-purple)] to-[var(--neon-cyan)] text-white text-sm font-medium hover:shadow-[0_0_20px_oklch(0.65_0.25_300/0.3)] transition-all"
+                onClick={handleReset}
+                className="px-4 py-2 rounded-xl glass-card text-white text-sm font-medium"
               >
-                <Box className="w-4 h-4" />
-                切换到 360° 预览
-              </button>
-              <button
-                onClick={onClose}
-                className="mt-3 text-xs text-[var(--muted-foreground)] hover:text-white transition-colors"
-              >
-                关闭
+                重新上传
               </button>
             </div>
           )}
 
-          {/* Scan line decoration */}
-          {status === "running" && faceDetected && (
-            <motion.div
-              initial={{ top: "10%" }}
-              animate={{ top: "90%" }}
-              transition={{ duration: 2, repeat: Infinity, repeatType: "reverse", ease: "easeInOut" }}
-              className="absolute left-0 right-0 h-0.5 bg-gradient-to-r from-transparent via-[var(--neon-cyan)]/50 to-transparent pointer-events-none"
-            />
+          {/* 就绪状态 — 顶部工具栏 */}
+          {status === "ready" && (
+            <>
+              <div className="absolute top-3 left-3 flex gap-2">
+                <button
+                  onClick={handleReset}
+                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-black/60 backdrop-blur text-white text-xs hover:bg-black/80 transition-colors"
+                >
+                  <RefreshCw className="w-3.5 h-3.5" />
+                  换照片
+                </button>
+                <button
+                  onClick={handleDownload}
+                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-black/60 backdrop-blur text-white text-xs hover:bg-black/80 transition-colors"
+                >
+                  <Download className="w-3.5 h-3.5" />
+                  保存
+                </button>
+              </div>
+            </>
           )}
+
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept="image/*"
+            capture="user"
+            onChange={handleFileSelect}
+            className="hidden"
+          />
         </div>
         )}
 
@@ -496,24 +492,24 @@ export default function ARTryOn({ onClose }: ARTryOnProps) {
         </div>
         )}
 
-        {/* Wig style selector */}
-        {(mode === "3d" || status === "running") && (
+        {/* 发型选择 + 调试面板 */}
+        {(mode === "3d" || status === "ready") && (
           <div className="p-4">
-            {/* 调试面板 — 临时滑动条 */}
-            {mode === "ar" && status === "running" && (
+            {/* 调试面板 */}
+            {mode === "photo" && status === "ready" && (
               <div className="mb-4 p-3 rounded-xl bg-black/30 border border-white/10">
                 <button
                   onClick={() => setShowDebug(!showDebug)}
                   className="flex items-center gap-2 text-xs text-[var(--neon-cyan)] mb-2"
                 >
-                  <SlidersHorizontal className="w-3.5 h-3.5" />
-                  {showDebug ? "收起调试面板" : "展开调试面板"}
+                  <RotateCw className="w-3.5 h-3.5" />
+                  {showDebug ? "收起微调" : "展开微调"}
                 </button>
                 {showDebug && (
                   <div className="space-y-3">
                     <div>
                       <div className="flex justify-between text-[10px] text-[var(--muted-foreground)] mb-1">
-                        <span>垂直偏移 (yOffset)</span>
+                        <span>垂直偏移</span>
                         <span className="text-white font-mono">{adjust.yOffset}px</span>
                       </div>
                       <input
@@ -527,7 +523,7 @@ export default function ARTryOn({ onClose }: ARTryOnProps) {
                     </div>
                     <div>
                       <div className="flex justify-between text-[10px] text-[var(--muted-foreground)] mb-1">
-                        <span>大小 (scale)</span>
+                        <span>大小</span>
                         <span className="text-white font-mono">{adjust.scale.toFixed(2)}x</span>
                       </div>
                       <input
@@ -551,6 +547,7 @@ export default function ARTryOn({ onClose }: ARTryOnProps) {
               </div>
             )}
 
+            {/* 发型选择器 */}
             <div className="flex items-center justify-between mb-3">
               <div className="flex items-center gap-2">
                 <Shuffle className="w-4 h-4 text-[var(--neon-purple)]" />
@@ -565,7 +562,7 @@ export default function ARTryOn({ onClose }: ARTryOnProps) {
                 )}
               </div>
             </div>
-            <div className="grid grid-cols-3 sm:grid-cols-6 gap-2">
+            <div className="grid grid-cols-4 sm:grid-cols-7 gap-2">
               {WIG_STYLES.map((wig, i) => (
                 <button
                   key={wig.id}
@@ -584,10 +581,9 @@ export default function ARTryOn({ onClose }: ARTryOnProps) {
               ))}
             </div>
 
-            {/* 提示 */}
-            {mode === "ar" && WIG_STYLES[currentWig].multiAngle && (
+            {mode === "photo" && (
               <p className="text-[10px] text-[var(--muted-foreground)] mt-2 text-center">
-                转动头部可查看不同角度效果（左 / 正面 / 右）
+                上传正面照片 · AI 自动佩戴 · 可微调位置和大小
               </p>
             )}
             {mode === "3d" && (
