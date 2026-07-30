@@ -1,12 +1,17 @@
 import { useRef, useEffect, useState, useCallback, lazy, Suspense } from "react";
 import { motion } from "framer-motion";
-import { X, Camera, Shuffle, AlertCircle, Loader2, ScanFace, RotateCw, Box, Smartphone } from "lucide-react";
+import { X, Camera, Shuffle, AlertCircle, Loader2, ScanFace, RotateCw, Box, Smartphone, SlidersHorizontal } from "lucide-react";
 import {
   calculateHeadPose,
   yawToFrameIndex,
   type HeadPose,
 } from "@/utils/headPose";
-import { calculateWigTransform } from "@/utils/wigPosition";
+import {
+  calculateWigTransformRaw,
+  WigSmoother,
+  DEFAULT_ADJUST,
+  type WigAdjustParams,
+} from "@/utils/wigPosition";
 
 // 懒加载 360° 预览组件（减少首屏体积）
 const Wig360Viewer = lazy(() => import("@/components/Wig360Viewer"));
@@ -58,6 +63,15 @@ export default function ARTryOn({ onClose }: ARTryOnProps) {
   const [mode, setMode] = useState<"ar" | "3d">("ar");
   const [headPose, setHeadPose] = useState<HeadPose>({ yaw: 0, pitch: 0, roll: 0 });
   const [currentFrame, setCurrentFrame] = useState(1); // 默认正面
+
+  // 调试参数（临时滑动条）
+  const [adjust, setAdjust] = useState<WigAdjustParams>(DEFAULT_ADJUST);
+  const [showDebug, setShowDebug] = useState(false);
+  const adjustRef = useRef(adjust);
+  adjustRef.current = adjust;
+
+  // 阻尼平滑器
+  const smootherRef = useRef(new WigSmoother(0.3));
 
   // 加载假发图片（支持多角度和单张两种模式）
   const loadWigImages = useCallback((wigIndex: number) => {
@@ -252,28 +266,37 @@ export default function ARTryOn({ onClose }: ARTryOnProps) {
             setCurrentFrame(frameIdx);
           }
 
-          // ===== 精确假发定位 — 基于多关键点算法 =====
-          const transform = calculateWigTransform(lm, vw, vh, true);
+          // ===== 假发定位 v3 — 动态锚点 + 透视 + 阻尼平滑 =====
+          const rawTransform = calculateWigTransformRaw(
+            lm, vw, vh, adjustRef.current, true
+          );
 
-          if (!transform) return;
+          if (!rawTransform) return;
 
-          const { cx: wigCx, cy: wigCy, width: wigW, height: wigH, rotation: rollAngle } = transform;
+          // 阻尼平滑
+          const transform = smootherRef.current.update(rawTransform);
 
-          // 获取当前假发样式
           const wig = WIG_STYLES[currentWig];
 
-          // 统一绘制函数
+          // 绘制函数 — 应用 scaleX/scaleY 透视 + rotation
           const drawWig = (img: HTMLImageElement) => {
+            const w = transform.baseWidth;
+            const h = transform.baseHeight;
+
             ctx.save();
-            ctx.translate(wigCx, wigCy);
-            ctx.rotate(rollAngle);
+            // 移到假发中心
+            ctx.translate(transform.x, transform.y);
+            // Roll 旋转
+            ctx.rotate(transform.rotation);
+            // 透视缩放：先 X 压缩（Yaw），再 Y 缩放（Pitch）
+            ctx.scale(transform.scaleX, transform.scaleY);
             ctx.globalAlpha = 0.92;
-            ctx.drawImage(img, -wigW / 2, -wigH / 2, wigW, wigH);
+            // 绘制假发（中心对齐）
+            ctx.drawImage(img, -w / 2, -h / 2, w, h);
             ctx.restore();
           };
 
           if (wig.multiAngle) {
-            // 多角度模式：根据 Yaw 选择对应帧
             const frameIdx = yawToFrameIndex(smoothYaw, FRAME_COUNT);
             const images = wigImagesRef.current[currentWig];
 
@@ -283,7 +306,6 @@ export default function ARTryOn({ onClose }: ARTryOnProps) {
               drawWig(images[1]);
             }
           } else {
-            // 单张模式
             if (singleWigImgRef.current) {
               drawWig(singleWigImgRef.current);
             }
@@ -477,6 +499,58 @@ export default function ARTryOn({ onClose }: ARTryOnProps) {
         {/* Wig style selector */}
         {(mode === "3d" || status === "running") && (
           <div className="p-4">
+            {/* 调试面板 — 临时滑动条 */}
+            {mode === "ar" && status === "running" && (
+              <div className="mb-4 p-3 rounded-xl bg-black/30 border border-white/10">
+                <button
+                  onClick={() => setShowDebug(!showDebug)}
+                  className="flex items-center gap-2 text-xs text-[var(--neon-cyan)] mb-2"
+                >
+                  <SlidersHorizontal className="w-3.5 h-3.5" />
+                  {showDebug ? "收起调试面板" : "展开调试面板"}
+                </button>
+                {showDebug && (
+                  <div className="space-y-3">
+                    <div>
+                      <div className="flex justify-between text-[10px] text-[var(--muted-foreground)] mb-1">
+                        <span>垂直偏移 (yOffset)</span>
+                        <span className="text-white font-mono">{adjust.yOffset}px</span>
+                      </div>
+                      <input
+                        type="range"
+                        min={-200}
+                        max={200}
+                        value={adjust.yOffset}
+                        onChange={(e) => setAdjust({ ...adjust, yOffset: Number(e.target.value) })}
+                        className="w-full accent-[var(--neon-cyan)]"
+                      />
+                    </div>
+                    <div>
+                      <div className="flex justify-between text-[10px] text-[var(--muted-foreground)] mb-1">
+                        <span>大小 (scale)</span>
+                        <span className="text-white font-mono">{adjust.scale.toFixed(2)}x</span>
+                      </div>
+                      <input
+                        type="range"
+                        min={0.5}
+                        max={2.5}
+                        step={0.05}
+                        value={adjust.scale}
+                        onChange={(e) => setAdjust({ ...adjust, scale: Number(e.target.value) })}
+                        className="w-full accent-[var(--neon-purple)]"
+                      />
+                    </div>
+                    <button
+                      onClick={() => setAdjust(DEFAULT_ADJUST)}
+                      className="text-[10px] text-[var(--muted-foreground)] hover:text-white"
+                    >
+                      重置参数
+                    </button>
+                  </div>
+                )}
+              </div>
+            )}
+
             <div className="flex items-center justify-between mb-3">
               <div className="flex items-center gap-2">
                 <Shuffle className="w-4 h-4 text-[var(--neon-purple)]" />

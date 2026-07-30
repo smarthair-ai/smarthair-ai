@@ -3,6 +3,6 @@
   "sub_project_type": "",
   "name": "SmartHair AI",
   "app_slug": "smarthair-ai",
-  "version_description": "实现关键点精确定位算法",
+  "version_description": "修复假发定位并添加调试滑动条",
   "preview_type": "pc"
 }

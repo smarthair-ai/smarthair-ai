@@ -1,247 +1,254 @@
 /**
- * 假发定位算法 — 基于 MediaPipe Face Mesh 468 个关键点
+ * 假发定位算法 v3 — 动态锚点 + 透视修正 + 可调偏移
  *
- * 核心思路：
- * 1. 用多个关键点确定头部的"发际线"位置（假发底部边界）
- * 2. 用头部宽度和高度确定假发的覆盖范围
- * 3. 用 Roll 角旋转假发，使其与头部倾斜一致
- * 4. 用 Pitch/Yaw 微调假发的垂直和水平偏移
- *
- * MediaPipe 关键点参考：
- * - 10:  额头顶部（发际线中点附近）
- * - 151: 额头中上部
- * - 9:   鼻梁上方（眉心）
- * - 234: 左侧太阳穴
- * - 454: 右侧太阳穴
- * - 127: 左侧脸颊上沿（颧骨上方）
- * - 356: 右侧脸颊上沿（颧骨上方）
- * - 21:  左眉上方发际线
- * - 251: 右眉上方发际线
- * - 71:  左耳上方
- * - 301: 右耳上方
- * - 152: 下巴
- * - 1:   鼻尖
- * - 168: 鼻梁中点
- * - 33:  左眼外角
- * - 263: 右眼外角
- * - 8:   眉心上方（前额中部）
- * - 5:   鼻根（两眼之间）
+ * 核心改进（相比 v2）：
+ * 1. 锚点下移：假发底部对齐眉心上方，不再用"眉心 - 0.6U"导致飞到头顶上方
+ * 2. 尺寸放大：基础宽度 = face_width * 1.3，确保盖住耳朵
+ * 3. 透视修正：Pitch 驱动 scale 变化（抬头缩小上移，低头放大下移）
+ * 4. Y 轴偏移参数：yOffset 可手动微调
+ * 5. 保留阻尼平滑器
  */
 
-// 关键点索引定义
-export const WIG_LANDMARKS = {
-  FOREHEAD_TOP: 10,       // 额头顶部
-  FOREHEAD_MID: 151,      // 额头中部
-  BROW_CENTER: 9,         // 眉心
-  LEFT_TEMPLE: 234,       // 左太阳穴
-  RIGHT_TEMPLE: 454,      // 右太阳 temple
-  LEFT_BROW_TOP: 21,      // 左眉上方
-  RIGHT_BROW_TOP: 251,    // 右眉上方
-  LEFT_EAR_TOP: 127,      // 左耳上方
-  RIGHT_EAR_TOP: 356,     // 右耳上方
-  LEFT_CHEEK: 116,        // 左颧骨
-  RIGHT_CHEEK: 345,       // 右颧骨
-  CHIN: 152,              // 下巴
-  NOSE_TIP: 1,            // 鼻尖
-  NOSE_BRIDGE: 168,       // 鼻梁中点
-  LEFT_EYE: 33,           // 左眼外角
-  RIGHT_EYE: 263,         // 右眼外角
-  NOSE_ROOT: 5,           // 鼻根
-  FOREHEAD_CENTER: 8,     // 前额中部
+// ===== MediaPipe 关键点 =====
+const LM = {
+  BROW_CENTER: 9,      // 眉心
+  CHIN: 152,           // 下巴
+  NOSE_TIP: 1,         // 鼻尖
+  NOSE_BRIDGE: 168,    // 鼻梁中点
+  LEFT_EYE: 33,        // 左眼外角
+  RIGHT_EYE: 263,      // 右眼外角
+  LEFT_TEMPLE: 234,    // 左太阳穴
+  RIGHT_TEMPLE: 454,   // 右太阳穴
+  FOREHEAD: 10,        // 额头顶部
 };
 
+// ===== 输出接口 =====
 export interface WigTransform {
-  /** 假发中心 X（画布坐标） */
-  cx: number;
-  /** 假发中心 Y（画布坐标） */
-  cy: number;
-  /** 假发宽度（像素） */
-  width: number;
-  /** 假发高度（像素） */
-  height: number;
-  /** 旋转角度（弧度） */
+  x: number;           // 假发中心 X（画布坐标，已平滑）
+  y: number;           // 假发中心 Y（画布坐标，已平滑）
+  scaleX: number;      // X轴缩放（Yaw 透视压缩）
+  scaleY: number;      // Y轴缩放（Pitch 透视修正）
+  rotation: number;    // 旋转角度（弧度，已平滑）
+  baseWidth: number;   // 基础宽度（未缩放，供绘制用）
+  baseHeight: number;  // 基础高度（未缩放，供绘制用）
+}
+
+interface RawTransform {
+  x: number;
+  y: number;
+  scaleX: number;
+  scaleY: number;
   rotation: number;
-  /** 垂直偏移（像素，正值=下移） */
-  offsetY: number;
+  baseWidth: number;
+  baseHeight: number;
 }
 
 /**
- * 基于人脸关键点精确计算假发的位置和变换参数
- *
- * 算法步骤：
- *
- * 1. 确定发际线基准点：
- *    - 用关键点 10（额头顶部）作为发际线中点
- *    - 用关键点 21/251（左右眉上方）确定发际线宽度
- *    - 用关键点 234/454（左右太阳穴）确定头部最宽处
- *
- * 2. 计算假发宽度：
- *    - 取太阳穴间距（234→454）作为基础头部宽度
- *    - 假发需要覆盖整个头部，所以乘以 1.5 倍
- *    - 确保最少覆盖到耳朵位置
- *
- * 3. 计算假发高度：
- *    - 从发际线（10）到下巴（152）的距离作为脸部高度
- *    - 假发需要覆盖从头顶到发际线，约为脸部高度的 0.7 倍
- *    - 加上假发本身的造型高度，总高度约为脸高的 0.85 倍
- *
- * 4. 计算假发中心位置：
- *    - 水平：发际线中点的 X 坐标
- *    - 垂直：从发际线（10）向上偏移假发高度的 40%
- *      这样假发底部刚好在发际线位置，顶部在头顶上方
- *
- * 5. 计算旋转角度（Roll）：
- *    - 用双眼连线（33→263）的倾斜角度
- *    - 假发跟随头部一起倾斜
- *
- * 6. Pitch/Yaw 微调：
- *    - Pitch（点头/抬头）：通过鼻尖相对于眼睛的位置变化，
- *      调整假发的垂直偏移。抬头时假发上移，低头时下移
- *    - Yaw（左右转头）：通过鼻尖相对于面部中线的水平偏移，
- *      微调假发的水平位置
- *
- * @param landmarks MediaPipe 返回的 468 个关键点
- * @param videoWidth 视频宽度
- * @param videoHeight 视频高度
- * @param isMirrored 是否镜像翻转（前置摄像头通常为 true）
+ * 可调参数（调试滑动条控制）
  */
-export function calculateWigTransform(
+export interface WigAdjustParams {
+  /** 垂直偏移（像素，正值=下移，负值=上移） */
+  yOffset: number;
+  /** 大小缩放（1.0=默认，>1放大，<1缩小） */
+  scale: number;
+}
+
+export const DEFAULT_ADJUST: WigAdjustParams = {
+  yOffset: 0,
+  scale: 1.0,
+};
+
+// =====================================================================
+// 核心计算函数
+// =====================================================================
+export function calculateWigTransformRaw(
   landmarks: any[],
   videoWidth: number,
   videoHeight: number,
+  adjust: WigAdjustParams = DEFAULT_ADJUST,
   isMirrored: boolean = true
-): WigTransform | null {
-  // 获取关键点
-  const foreheadTop = landmarks[WIG_LANDMARKS.FOREHEAD_TOP];     // 10
-  const leftTemple = landmarks[WIG_LANDMARKS.LEFT_TEMPLE];       // 234
-  const rightTemple = landmarks[WIG_LANDMARKS.RIGHT_TEMPLE];     // 454
-  const chin = landmarks[WIG_LANDMARKS.CHIN];                    // 152
-  const noseTip = landmarks[WIG_LANDMARKS.NOSE_TIP];             // 1
-  const leftEye = landmarks[WIG_LANDMARKS.LEFT_EYE];             // 33
-  const rightEye = landmarks[WIG_LANDMARKS.RIGHT_EYE];           // 263
+): RawTransform | null {
 
-  // 检查关键点是否存在
-  if (!foreheadTop || !leftTemple || !rightTemple || !chin || !leftEye || !rightEye) {
+  const brow = landmarks[LM.BROW_CENTER];
+  const chin = landmarks[LM.CHIN];
+  const noseTip = landmarks[LM.NOSE_TIP];
+  const noseBridge = landmarks[LM.NOSE_BRIDGE];
+  const leftEye = landmarks[LM.LEFT_EYE];
+  const rightEye = landmarks[LM.RIGHT_EYE];
+  const leftTemple = landmarks[LM.LEFT_TEMPLE];
+  const rightTemple = landmarks[LM.RIGHT_TEMPLE];
+
+  if (!brow || !chin || !noseTip || !noseBridge || !leftEye || !rightEye || !leftTemple || !rightTemple) {
     return null;
   }
 
-  // 坐标转换函数（镜像翻转）
-  const toX = (x: number) => (isMirrored ? (1 - x) : x) * videoWidth;
+  const toX = (x: number) => (isMirrored ? 1 - x : x) * videoWidth;
   const toY = (y: number) => y * videoHeight;
 
-  // ===== 步骤 1: 计算头部关键尺寸 =====
-
-  // 太阳穴间距 — 头部最宽处
-  const templeWidth = Math.abs(toX(rightTemple.x) - toX(leftTemple.x));
-
-  // 发际线到下巴的距离 — 脸部高度
-  const foreheadY = toY(foreheadTop.y);
+  // ================================================================
+  // 步骤 1: 动态锚点 — 基准单位 U
+  // U = 鼻梁(168) 到 下巴(152) 的距离
+  // 用鼻梁而不是眉心，因为鼻梁更稳定，不受眉毛表情影响
+  // ================================================================
+  const browX = toX(brow.x);
+  const browY = toY(brow.y);
   const chinY = toY(chin.y);
-  const faceHeight = Math.abs(chinY - foreheadY);
+  const noseBridgeY = toY(noseBridge.y);
+  const noseBridgeX = toX(noseBridge.x);
+  const chinX = toX(chin.x);
 
-  // ===== 步骤 2: 计算假发尺寸 =====
+  const U = Math.sqrt(
+    (chinX - noseBridgeX) ** 2 + (chinY - noseBridgeY) ** 2
+  );
+  if (U < 1) return null;
 
-  // 假发宽度：太阳穴间距 × 1.5（覆盖两侧耳朵和发尾）
-  const wigWidth = templeWidth * 1.5;
+  // ================================================================
+  // 步骤 2: 头部宽度 — 太阳穴间距
+  // ================================================================
+  const leftTempleX = toX(leftTemple.x);
+  const rightTempleX = toX(rightTemple.x);
+  const templeWidth = Math.abs(rightTempleX - leftTempleX);
+  const templeMidX = (leftTempleX + rightTempleX) / 2;
 
-  // 假发高度：脸部高度 × 0.85（从头顶到发际线下方一点）
-  const wigHeight = faceHeight * 0.85;
+  // ================================================================
+  // 步骤 3: 假发基础尺寸
+  // 宽度 = face_width(太阳穴间距) * 1.3 * 用户缩放
+  // 高度 = 宽度 * 假发图片宽高比（假发图片是竖长的，约 0.75）
+  //   但我们用 U 来限定最小高度，确保覆盖头顶
+  // ================================================================
+  const baseWidth = templeWidth * 1.3 * adjust.scale;
+  // 假发高度：用 U 的 1.0 倍（鼻梁到下巴的距离 ≈ 头顶到眉心的距离）
+  const baseHeight = U * 1.1 * adjust.scale;
 
-  // ===== 步骤 3: 计算假发中心位置 =====
+  // ================================================================
+  // 步骤 4: Yaw → scaleX 透视压缩
+  // ================================================================
+  const noseX = toX(noseTip.x);
+  const yawRatio = templeWidth > 0.001
+    ? ((noseX - templeMidX) / templeWidth) * 2
+    : 0;
+  const yaw = Math.max(-1, Math.min(1, yawRatio));
+  const scaleX = Math.max(0.35, Math.cos(yaw * Math.PI / 2));
 
-  // 水平中心：发际线中点
-  const foreheadCenterX = toX(foreheadTop.x);
-
-  // 垂直中心：从发际线向上偏移假发高度的 35%
-  // 这样假发图片的底部大约在发际线位置
-  // 假发图片的中心点大约在头部的中上部
-  const wigCenterY = foreheadY - wigHeight * 0.35;
-
-  // ===== 步骤 4: 计算旋转角度（Roll）=====
-
-  // 双眼连线的倾斜角度
-  const eyeDx = toX(rightEye.x) - toX(leftEye.x);
-  const eyeDy = toY(rightEye.y) - toY(leftEye.y);
-  const rollAngle = Math.atan2(eyeDy, eyeDx);
-
-  // ===== 步骤 5: Pitch/Yaw 微调 =====
-
-  // Pitch（俯仰角）：通过鼻尖相对于眼睛中点的垂直位置变化
-  // 抬头时鼻尖上移，低头时下移
+  // ================================================================
+  // 步骤 5: Pitch → scaleY 透视修正
+  // 鼻尖在鼻梁→下巴线段上的比例
+  // 正面约 0.4，抬头减小（鼻尖上移），低头增大（鼻尖下移）
+  // 抬头：scaleY < 1（缩小），y 上移
+  // 低头：scaleY > 1（放大），y 下移
+  // ================================================================
   const noseTipY = toY(noseTip.y);
-  const eyeMidY = (toY(leftEye.y) + toY(rightEye.y)) / 2;
-  const eyeToChin = chinY - eyeMidY;
-  let pitchOffsetY = 0;
+  const bridgeToChin = chinY - noseBridgeY;
+  let pitchFactor = 0; // -1(抬头) ~ +1(低头)
+  let scaleY = 1.0;
 
-  if (eyeToChin > 0.001) {
-    const noseRatio = (noseTipY - eyeMidY) / eyeToChin;
-    // 正面时约 0.35，抬头时减小（<0.35），低头时增大（>0.35）
-    pitchOffsetY = (0.35 - noseRatio) * faceHeight * 0.2;
+  if (Math.abs(bridgeToChin) > 0.001) {
+    const noseRatio = (noseTipY - noseBridgeY) / bridgeToChin;
+    // 正面约 0.4
+    pitchFactor = Math.max(-1, Math.min(1, (noseRatio - 0.4) * 3));
+    // 抬头 pitchFactor<0 → scaleY<1，低头 pitchFactor>0 → scaleY>1
+    scaleY = 1.0 + pitchFactor * 0.15;
   }
 
-  // Yaw（偏航角）：通过鼻尖相对于太阳穴中线的水平偏移
-  const templeMidX = (toX(leftTemple.x) + toX(rightTemple.x)) / 2;
-  const noseTipX = toX(noseTip.x);
-  const yawOffset = (noseTipX - templeMidX) * 0.15;
+  // ================================================================
+  // 步骤 6: 假发中心位置
+  //
+  // 水平：眉心 X + Yaw 微移
+  // 垂直：眉心 Y - baseHeight * 0.15（假发底部在眉心上方 15%处）
+  //   + yOffset（用户手动调整）
+  //   + Pitch 透视偏移（抬头上移，低下移）
+  // ================================================================
+  const x = browX + yaw * 0.1 * U;
 
-  // ===== 步骤 6: 返回最终变换参数 =====
+  // 关键修正：假发中心 Y
+  // 假发图片中心点大约在图片垂直中点
+  // 我们希望假发底部（图片下边缘）在眉心上方一点
+  // 所以中心 Y = 眉心Y - baseHeight/2 + baseHeight*0.35
+  //   = 眉心Y - baseHeight * 0.15
+  // 这意味着假发下边缘在 眉心Y + baseHeight * 0.35 处（眉心下方）
+  // 不对，应该是：中心Y - baseHeight/2 = 底部Y
+  // 底部Y = 眉心Y - baseHeight * 0.1（底部在眉心上方 10%）
+  // 中心Y = 底部Y + baseHeight/2 = 眉心Y - baseHeight*0.1 + baseHeight*0.5
+  //       = 眉心Y + baseHeight * 0.4
+  //
+  // 但这样假发会盖住眼睛...
+  // 重新思考：假发图片是头模照片，中心大约在头顶到发际线中间
+  // 我们要让发际线对齐眉心上方
+  // 假发图片中，发际线大约在图片 60% 处（从顶部算）
+  // 所以中心Y = 眉心Y - baseHeight * (0.6 - 0.5) = 眉心Y - baseHeight * 0.1
+  //
+  // 但实际图片各异，所以用 yOffset 让用户调
+  const y = browY - baseHeight * 0.1
+    + adjust.yOffset              // 用户手动偏移
+    + pitchFactor * U * 0.1;      // Pitch 透视偏移
+
+  // ================================================================
+  // 步骤 7: Roll 旋转
+  // ================================================================
+  const eyeDx = toX(rightEye.x) - toX(leftEye.x);
+  const eyeDy = toY(rightEye.y) - toY(leftEye.y);
+  const rotation = Math.atan2(eyeDy, eyeDx);
 
   return {
-    cx: foreheadCenterX + yawOffset,
-    cy: wigCenterY + pitchOffsetY,
-    width: wigWidth,
-    height: wigHeight,
-    rotation: rollAngle,
-    offsetY: 0,
+    x,
+    y,
+    scaleX,
+    scaleY,
+    rotation,
+    baseWidth,
+    baseHeight,
   };
 }
 
-/**
- * 计算发际线的精确位置
- *
- * 用额头上方的多个关键点拟合一条发际线
- * 这比单用关键点 10 更准确
- */
-export function getHairlineY(landmarks: any[], videoHeight: number): number {
-  const points = [
-    landmarks[WIG_LANDMARKS.FOREHEAD_TOP],     // 10
-    landmarks[WIG_LANDMARKS.FOREHEAD_MID],     // 151
-    landmarks[WIG_LANDMARKS.FOREHEAD_CENTER],  // 8
-  ].filter(Boolean);
+// =====================================================================
+// 阻尼平滑器
+// =====================================================================
+export class WigSmoother {
+  private prev: WigTransform | null = null;
+  private alpha: number;
 
-  if (points.length === 0) return 0;
-
-  // 取这些点的平均 Y 值
-  const avgY = points.reduce((sum, p) => sum + p.y, 0) / points.length;
-  return avgY * videoHeight;
-}
-
-/**
- * 计算头部宽度（包含耳朵区域）
- *
- * 用太阳穴和颧骨关键点确定头部最宽处
- */
-export function getHeadWidth(
-  landmarks: any[],
-  videoWidth: number,
-  isMirrored: boolean = true
-): number {
-  const toX = (x: number) => (isMirrored ? (1 - x) : x) * videoWidth;
-
-  const leftTemple = landmarks[WIG_LANDMARKS.LEFT_TEMPLE];
-  const rightTemple = landmarks[WIG_LANDMARKS.RIGHT_TEMPLE];
-  const leftCheek = landmarks[WIG_LANDMARKS.LEFT_CHEEK];
-  const rightCheek = landmarks[WIG_LANDMARKS.RIGHT_CHEEK];
-
-  if (!leftTemple || !rightTemple) return 0;
-
-  const templeWidth = Math.abs(toX(rightTemple.x) - toX(leftTemple.x));
-
-  // 如果有颧骨数据，取更宽的值
-  if (leftCheek && rightCheek) {
-    const cheekWidth = Math.abs(toX(rightCheek.x) - toX(leftCheek.x));
-    return Math.max(templeWidth, cheekWidth);
+  constructor(alpha: number = 0.3) {
+    this.alpha = alpha;
   }
 
-  return templeWidth;
+  update(raw: RawTransform): WigTransform {
+    if (!this.prev) {
+      const init: WigTransform = {
+        x: raw.x, y: raw.y,
+        scaleX: raw.scaleX, scaleY: raw.scaleY,
+        rotation: raw.rotation,
+        baseWidth: raw.baseWidth, baseHeight: raw.baseHeight,
+      };
+      this.prev = { ...init };
+      return init;
+    }
+
+    const smoothed: WigTransform = {
+      x: this.lerp(this.prev.x, raw.x),
+      y: this.lerp(this.prev.y, raw.y),
+      scaleX: this.lerp(this.prev.scaleX, raw.scaleX),
+      scaleY: this.lerp(this.prev.scaleY, raw.scaleY),
+      rotation: this.lerpAngle(this.prev.rotation, raw.rotation),
+      baseWidth: raw.baseWidth,  // 尺寸不平滑，避免抖动
+      baseHeight: raw.baseHeight,
+    };
+
+    this.prev = { ...smoothed };
+    return smoothed;
+  }
+
+  reset() {
+    this.prev = null;
+  }
+
+  private lerp(prev: number, curr: number): number {
+    return prev + (curr - prev) * this.alpha;
+  }
+
+  private lerpAngle(a: number, b: number): number {
+    let diff = b - a;
+    if (diff > Math.PI) diff -= 2 * Math.PI;
+    if (diff < -Math.PI) diff += 2 * Math.PI;
+    return a + diff * this.alpha;
+  }
 }
