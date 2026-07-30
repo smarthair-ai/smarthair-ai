@@ -3,6 +3,6 @@
   "sub_project_type": "",
   "name": "SmartHair AI",
   "app_slug": "smarthair-ai",
-  "version_description": "优化 AR 入口位置和错误处理",
+  "version_description": "AI 抠图去除假发白底背景",
   "preview_type": "pc"
 }

@@ -277,11 +277,15 @@ export default function ARTryOn({ onClose }: ARTryOnProps) {
           const eyeDx = toCanvasX(rightEye.x) - toCanvasX(leftEye.x);
           const rollAngle = Math.atan2(eyeDy, eyeDx);
 
-          // 假发尺寸和位置
-          const wigW = faceWidth * 1.4;
-          const wigH = faceHeight * 0.9;
+          // 假发尺寸和位置 — 基于脸部关键点精确计算
+          // 假发宽度：脸宽的 1.6 倍（覆盖两侧耳朵）
+          const wigW = faceWidth * 1.6;
+          // 假发高度：从头顶到下巴的 1.1 倍
+          const wigH = faceHeight * 1.1;
+          // 假发中心 X：额头中心
           const wigCx = topX;
-          const wigCy = topY - faceHeight * 0.1;
+          // 假发中心 Y：略高于头顶（假发图片中心大约在头部中上部）
+          const wigCy = topY + faceHeight * 0.15;
 
           // 获取当前假发样式
           const wig = WIG_STYLES[currentWig];
@@ -291,19 +295,20 @@ export default function ARTryOn({ onClose }: ARTryOnProps) {
             const frameIdx = yawToFrameIndex(smoothYaw, FRAME_COUNT);
             const images = wigImagesRef.current[currentWig];
 
-            if (images && images[frameIdx]) {
-              ctx.save();
-              ctx.translate(wigCx, wigCy);
-              ctx.rotate(rollAngle); // 应用 Roll 旋转
-              ctx.drawImage(images[frameIdx], -wigW / 2, -wigH / 2, wigW, wigH);
-              ctx.restore();
-            } else if (images && images[1]) {
-              // 帧未加载完，先用正面图
+            const drawWig = (img: HTMLImageElement) => {
               ctx.save();
               ctx.translate(wigCx, wigCy);
               ctx.rotate(rollAngle);
-              ctx.drawImage(images[1], -wigW / 2, -wigH / 2, wigW, wigH);
+              // 边缘平滑混合
+              ctx.globalAlpha = 0.95;
+              ctx.drawImage(img, -wigW / 2, -wigH / 2, wigW, wigH);
               ctx.restore();
+            };
+
+            if (images && images[frameIdx]) {
+              drawWig(images[frameIdx]);
+            } else if (images && images[1]) {
+              drawWig(images[1]);
             }
           } else {
             // 单张模式
@@ -311,6 +316,7 @@ export default function ARTryOn({ onClose }: ARTryOnProps) {
               ctx.save();
               ctx.translate(wigCx, wigCy);
               ctx.rotate(rollAngle);
+              ctx.globalAlpha = 0.95;
               ctx.drawImage(singleWigImgRef.current, -wigW / 2, -wigH / 2, wigW, wigH);
               ctx.restore();
             }
