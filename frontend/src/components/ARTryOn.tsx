@@ -6,6 +6,7 @@ import {
   yawToFrameIndex,
   type HeadPose,
 } from "@/utils/headPose";
+import { calculateWigTransform } from "@/utils/wigPosition";
 
 // 懒加载 360° 预览组件（减少首屏体积）
 const Wig360Viewer = lazy(() => import("@/components/Wig360Viewer"));
@@ -251,59 +252,30 @@ export default function ARTryOn({ onClose }: ARTryOnProps) {
             setCurrentFrame(frameIdx);
           }
 
-          // 关键点坐标
-          const top = lm[10];        // 头顶
-          const leftFace = lm[234];  // 左脸颊
-          const rightFace = lm[454]; // 右脸颊
-          const chin = lm[152];      // 下巴
-          const leftEye = lm[33];    // 左眼外角
-          const rightEye = lm[263];  // 右眼外角
+          // ===== 精确假发定位 — 基于多关键点算法 =====
+          const transform = calculateWigTransform(lm, vw, vh, true);
 
-          // 转换为画布坐标（镜像翻转）
-          const toCanvasX = (x: number) => (1 - x) * vw;
-          const toCanvasY = (y: number) => y * vh;
+          if (!transform) return;
 
-          const topX = toCanvasX(top.x);
-          const topY = top.y * vh - 10;
-          const leftX = toCanvasX(leftFace.x);
-          const rightX = toCanvasX(rightFace.x);
-
-          // 计算脸宽和脸高
-          const faceWidth = Math.abs(rightX - leftX);
-          const faceHeight = Math.abs(toCanvasY(chin.y) - topY);
-
-          // 头部旋转角度（Roll — 歪头）
-          const eyeDy = toCanvasY(rightEye.y) - toCanvasY(leftEye.y);
-          const eyeDx = toCanvasX(rightEye.x) - toCanvasX(leftEye.x);
-          const rollAngle = Math.atan2(eyeDy, eyeDx);
-
-          // 假发尺寸和位置 — 基于脸部关键点精确计算
-          // 假发宽度：脸宽的 1.6 倍（覆盖两侧耳朵）
-          const wigW = faceWidth * 1.6;
-          // 假发高度：从头顶到下巴的 1.1 倍
-          const wigH = faceHeight * 1.1;
-          // 假发中心 X：额头中心
-          const wigCx = topX;
-          // 假发中心 Y：略高于头顶（假发图片中心大约在头部中上部）
-          const wigCy = topY + faceHeight * 0.15;
+          const { cx: wigCx, cy: wigCy, width: wigW, height: wigH, rotation: rollAngle } = transform;
 
           // 获取当前假发样式
           const wig = WIG_STYLES[currentWig];
+
+          // 统一绘制函数
+          const drawWig = (img: HTMLImageElement) => {
+            ctx.save();
+            ctx.translate(wigCx, wigCy);
+            ctx.rotate(rollAngle);
+            ctx.globalAlpha = 0.92;
+            ctx.drawImage(img, -wigW / 2, -wigH / 2, wigW, wigH);
+            ctx.restore();
+          };
 
           if (wig.multiAngle) {
             // 多角度模式：根据 Yaw 选择对应帧
             const frameIdx = yawToFrameIndex(smoothYaw, FRAME_COUNT);
             const images = wigImagesRef.current[currentWig];
-
-            const drawWig = (img: HTMLImageElement) => {
-              ctx.save();
-              ctx.translate(wigCx, wigCy);
-              ctx.rotate(rollAngle);
-              // 边缘平滑混合
-              ctx.globalAlpha = 0.95;
-              ctx.drawImage(img, -wigW / 2, -wigH / 2, wigW, wigH);
-              ctx.restore();
-            };
 
             if (images && images[frameIdx]) {
               drawWig(images[frameIdx]);
@@ -313,12 +285,7 @@ export default function ARTryOn({ onClose }: ARTryOnProps) {
           } else {
             // 单张模式
             if (singleWigImgRef.current) {
-              ctx.save();
-              ctx.translate(wigCx, wigCy);
-              ctx.rotate(rollAngle);
-              ctx.globalAlpha = 0.95;
-              ctx.drawImage(singleWigImgRef.current, -wigW / 2, -wigH / 2, wigW, wigH);
-              ctx.restore();
+              drawWig(singleWigImgRef.current);
             }
           }
         }
