@@ -1,6 +1,6 @@
 import { useRef, useEffect, useState, useCallback, lazy, Suspense } from "react";
 import { motion } from "framer-motion";
-import { X, Camera, Shuffle, AlertCircle, Loader2, ScanFace, RotateCw, Box, Upload, Image as ImageIcon, Download, RefreshCw } from "lucide-react";
+import { X, Camera, Shuffle, AlertCircle, Loader2, ScanFace, RotateCw, Box, Upload, Download, RefreshCw } from "lucide-react";
 import {
   calculateWigTransformRaw,
   DEFAULT_ADJUST,
@@ -46,7 +46,9 @@ export default function ARTryOn({ onClose }: ARTryOnProps) {
   const [status, setStatus] = useState<"idle" | "analyzing" | "ready" | "error" | "no-face">("idle");
   const [errorMsg, setErrorMsg] = useState("");
   const [currentWig, setCurrentWig] = useState(0);
-  const [mode, setMode] = useState<"camera" | "photo" | "3d">("photo");
+  const [mode, setMode] = useState<"photo" | "3d">("photo");
+  // 试戴输入方式：none=选择界面, camera=拍照预览
+  const [inputMethod, setInputMethod] = useState<"none" | "camera">("none");
 
   // 调试参数
   const [adjust, setAdjust] = useState<WigAdjustParams>(DEFAULT_ADJUST);
@@ -323,17 +325,15 @@ export default function ARTryOn({ onClose }: ARTryOnProps) {
     }
   }, [adjust, status, renderPhoto]);
 
-  // 进入拍照试戴模式时打开摄像头，离开时关闭
+  // 进入拍照预览时打开摄像头，返回选择或离开时关闭
   useEffect(() => {
-    if (mode === "camera") {
+    if (inputMethod === "camera") {
       startCamera();
     } else {
       stopCamera();
     }
-    return () => {
-      if (mode === "camera") stopCamera();
-    };
-  }, [mode, startCamera, stopCamera]);
+    return () => stopCamera();
+  }, [inputMethod, startCamera, stopCamera]);
 
   // 下载结果
   const handleDownload = () => {
@@ -345,13 +345,13 @@ export default function ARTryOn({ onClose }: ARTryOnProps) {
     link.click();
   };
 
-  // 重置
+  // 重置：回到选择界面
   const handleReset = () => {
     photoRef.current = null;
     landmarksRef.current = [];
     setStatus("idle");
+    setInputMethod("none");
     setAdjust(DEFAULT_ADJUST);
-    if (mode === "camera") startCamera();
   };
 
   // 清理
@@ -381,31 +381,18 @@ export default function ARTryOn({ onClose }: ARTryOnProps) {
         {/* Header */}
         <div className="flex items-center justify-between p-4 border-b border-white/10">
           <div className="flex items-center gap-2">
-            {mode === "camera" ? (
+            {mode === "photo" ? (
               <Camera className="w-5 h-5 text-[var(--neon-cyan)]" />
-            ) : mode === "photo" ? (
-              <ImageIcon className="w-5 h-5 text-[var(--neon-cyan)]" />
             ) : (
               <Box className="w-5 h-5 text-[var(--neon-purple)]" />
             )}
             <span className="text-sm font-medium text-white">
-              {mode === "camera" ? "拍照试戴" : mode === "photo" ? "照片试戴" : "360° 预览"}
+              {mode === "photo" ? "AI 试戴" : "360° 预览"}
             </span>
           </div>
 
           {/* 模式切换 */}
           <div className="flex items-center gap-2">
-            <button
-              onClick={() => setMode("camera")}
-              className={`flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-medium transition-all ${
-                mode === "camera"
-                  ? "bg-gradient-to-r from-[var(--neon-purple)] to-[var(--neon-cyan)] text-white"
-                  : "bg-white/5 text-[var(--muted-foreground)] hover:bg-white/10"
-              }`}
-            >
-              <Camera className="w-3.5 h-3.5" />
-              <span className="hidden sm:inline">拍照试戴</span>
-            </button>
             <button
               onClick={() => setMode("photo")}
               className={`flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-medium transition-all ${
@@ -414,8 +401,8 @@ export default function ARTryOn({ onClose }: ARTryOnProps) {
                   : "bg-white/5 text-[var(--muted-foreground)] hover:bg-white/10"
               }`}
             >
-              <ImageIcon className="w-3.5 h-3.5" />
-              <span className="hidden sm:inline">照片试戴</span>
+              <Camera className="w-3.5 h-3.5" />
+              <span className="hidden sm:inline">拍照/上传</span>
             </button>
             <button
               onClick={() => setMode("3d")}
@@ -437,40 +424,77 @@ export default function ARTryOn({ onClose }: ARTryOnProps) {
           </div>
         </div>
 
-        {/* Viewport — 拍照试戴模式（摄像头实时预览 + 快门） */}
-        {mode === "camera" && (
+        {/* Viewport — 试戴模式（拍照 / 上传 二选一） */}
+        {mode === "photo" && (
           <div className="relative aspect-[3/4] bg-black overflow-hidden">
-            <video
-              ref={videoRef}
-              className="absolute inset-0 w-full h-full object-cover"
-              style={{ transform: "scaleX(-1)", display: status === "ready" ? "none" : "block" }}
-              muted
-              playsInline
-            />
             <canvas
               ref={canvasRef}
               className="absolute inset-0 w-full h-full object-contain"
               style={{ display: status === "ready" ? "block" : "none" }}
             />
 
-            {/* 实时预览中：快门按钮 */}
-            {status === "idle" && (
-              <div className="absolute inset-0 flex flex-col items-center justify-center">
+            {/* 选择输入方式 */}
+            {status === "idle" && inputMethod === "none" && (
+              <div className="absolute inset-0 flex flex-col items-center justify-center gap-5 p-6">
+                <div className="w-20 h-20 rounded-full bg-gradient-to-br from-[var(--neon-purple)]/20 to-[var(--neon-cyan)]/20 flex items-center justify-center mb-1">
+                  <Camera className="w-10 h-10 text-[var(--neon-cyan)]" />
+                </div>
+                <div className="text-center">
+                  <p className="text-sm text-white">选择试戴方式</p>
+                  <p className="text-xs text-[var(--muted-foreground)] mt-1 max-w-xs">
+                    AI 会自动检测面部，为你戴上选中的发型
+                  </p>
+                </div>
+                <div className="flex gap-3 mt-1">
+                  <button
+                    onClick={() => setInputMethod("camera")}
+                    className="flex items-center gap-2 px-5 py-3 rounded-xl bg-gradient-to-r from-[var(--neon-purple)] to-[var(--neon-cyan)] text-white text-sm font-medium hover:shadow-[0_0_20px_oklch(0.65_0.25_300/0.3)] transition-all"
+                  >
+                    <Camera className="w-4 h-4" />
+                    拍照试戴
+                  </button>
+                  <button
+                    onClick={handleTakePhoto}
+                    className="flex items-center gap-2 px-5 py-3 rounded-xl bg-white/10 text-white text-sm font-medium hover:bg-white/20 transition-all"
+                  >
+                    <Upload className="w-4 h-4" />
+                    上传照片
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {/* 实时预览（拍照） */}
+            {status === "idle" && inputMethod === "camera" && (
+              <>
+                <video
+                  ref={videoRef}
+                  className="absolute inset-0 w-full h-full object-cover"
+                  style={{ transform: "scaleX(-1)" }}
+                  muted
+                  playsInline
+                />
                 <p className="absolute top-4 left-0 right-0 text-center text-xs text-white/80 px-4">
                   对准脸部，点击按钮拍照试戴
                 </p>
                 <button
                   onClick={handleCapture}
-                  className="w-16 h-16 rounded-full bg-white flex items-center justify-center shadow-[0_0_20px_rgba(255,255,255,0.4)] hover:scale-105 active:scale-95 transition-transform"
+                  className="absolute bottom-6 left-1/2 -translate-x-1/2 w-16 h-16 rounded-full bg-white flex items-center justify-center shadow-[0_0_20px_rgba(255,255,255,0.4)] hover:scale-105 active:scale-95 transition-transform"
                 >
                   <Camera className="w-7 h-7 text-black" />
                 </button>
-              </div>
+                <button
+                  onClick={() => setInputMethod("none")}
+                  className="absolute bottom-9 right-4 px-3 py-1.5 rounded-lg bg-black/60 backdrop-blur text-white text-xs hover:bg-black/80 transition-colors"
+                >
+                  返回
+                </button>
+              </>
             )}
 
             {/* 分析中 */}
             {status === "analyzing" && (
-              <div className="absolute inset-0 flex flex-col items-center justify-center bg-black/40">
+              <div className="absolute inset-0 flex flex-col items-center justify-center bg-black/30">
                 <Loader2 className="w-10 h-10 text-[var(--neon-cyan)] animate-spin mb-3" />
                 <span className="text-sm text-white">AI 正在检测面部...</span>
               </div>
@@ -481,12 +505,12 @@ export default function ARTryOn({ onClose }: ARTryOnProps) {
               <div className="absolute inset-0 flex flex-col items-center justify-center p-6 text-center bg-black/60">
                 <ScanFace className="w-12 h-12 text-orange-400 mb-3" />
                 <p className="text-sm text-white mb-1">未检测到人脸</p>
-                <p className="text-xs text-[var(--muted-foreground)] mb-4">请正对镜头、光线充足后重试</p>
+                <p className="text-xs text-[var(--muted-foreground)] mb-4">请正对镜头或使用正面清晰的照片</p>
                 <button
                   onClick={handleReset}
                   className="px-4 py-2 rounded-xl glass-card text-white text-sm font-medium"
                 >
-                  重新拍照
+                  重新选择
                 </button>
               </div>
             )}
@@ -501,7 +525,7 @@ export default function ARTryOn({ onClose }: ARTryOnProps) {
                   onClick={handleReset}
                   className="px-4 py-2 rounded-xl glass-card text-white text-sm font-medium"
                 >
-                  重新拍照
+                  重新选择
                 </button>
               </div>
             )}
@@ -514,7 +538,7 @@ export default function ARTryOn({ onClose }: ARTryOnProps) {
                   className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-black/60 backdrop-blur text-white text-xs hover:bg-black/80 transition-colors"
                 >
                   <RefreshCw className="w-3.5 h-3.5" />
-                  重拍
+                  重拍/换照片
                 </button>
                 <button
                   onClick={handleDownload}
@@ -525,116 +549,16 @@ export default function ARTryOn({ onClose }: ARTryOnProps) {
                 </button>
               </div>
             )}
+
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept="image/*"
+              capture="user"
+              onChange={handleFileSelect}
+              className="hidden"
+            />
           </div>
-        )}
-
-        {/* Viewport — 照片试戴模式 */}
-        {mode === "photo" && (
-        <div className="relative aspect-[3/4] bg-black overflow-hidden">
-          <canvas
-            ref={canvasRef}
-            className="absolute inset-0 w-full h-full object-contain"
-          />
-
-          {/* 空闲状态 — 上传/拍照入口 */}
-          {status === "idle" && (
-            <div className="absolute inset-0 flex flex-col items-center justify-center gap-4 p-6">
-              <div className="w-20 h-20 rounded-full bg-gradient-to-br from-[var(--neon-purple)]/20 to-[var(--neon-cyan)]/20 flex items-center justify-center mb-2">
-                <ImageIcon className="w-10 h-10 text-[var(--neon-cyan)]" />
-              </div>
-              <p className="text-sm text-white text-center">上传一张正面照片</p>
-              <p className="text-xs text-[var(--muted-foreground)] text-center max-w-xs">
-                AI 会自动检测面部，为你戴上选中的发型
-              </p>
-              <div className="flex gap-3 mt-2">
-                <button
-                  onClick={handleTakePhoto}
-                  className="flex items-center gap-2 px-6 py-3 rounded-xl bg-gradient-to-r from-[var(--neon-purple)] to-[var(--neon-cyan)] text-white text-sm font-medium hover:shadow-[0_0_20px_oklch(0.65_0.25_300/0.3)] transition-all"
-                >
-                  <Upload className="w-4 h-4" />
-                  上传照片
-                </button>
-              </div>
-              <input
-                ref={fileInputRef}
-                type="file"
-                accept="image/*"
-                capture="user"
-                onChange={handleFileSelect}
-                className="hidden"
-              />
-            </div>
-          )}
-
-          {/* 分析中 */}
-          {status === "analyzing" && (
-            <div className="absolute inset-0 flex flex-col items-center justify-center">
-              <Loader2 className="w-10 h-10 text-[var(--neon-cyan)] animate-spin mb-3" />
-              <span className="text-sm text-[var(--muted-foreground)]">AI 正在检测面部...</span>
-            </div>
-          )}
-
-          {/* 未检测到人脸 */}
-          {status === "no-face" && (
-            <div className="absolute inset-0 flex flex-col items-center justify-center p-6 text-center">
-              <ScanFace className="w-12 h-12 text-orange-400 mb-3" />
-              <p className="text-sm text-white mb-1">未检测到人脸</p>
-              <p className="text-xs text-[var(--muted-foreground)] mb-4">请使用正面清晰的照片</p>
-              <button
-                onClick={handleReset}
-                className="px-4 py-2 rounded-xl glass-card text-white text-sm font-medium"
-              >
-                重新上传
-              </button>
-            </div>
-          )}
-
-          {/* 错误 */}
-          {status === "error" && (
-            <div className="absolute inset-0 flex flex-col items-center justify-center p-6 text-center">
-              <AlertCircle className="w-12 h-12 text-orange-400 mb-3" />
-              <p className="text-sm text-white mb-1">出错了</p>
-              <p className="text-xs text-[var(--muted-foreground)] mb-4">{errorMsg}</p>
-              <button
-                onClick={handleReset}
-                className="px-4 py-2 rounded-xl glass-card text-white text-sm font-medium"
-              >
-                重新上传
-              </button>
-            </div>
-          )}
-
-          {/* 就绪状态 — 顶部工具栏 */}
-          {status === "ready" && (
-            <>
-              <div className="absolute top-3 left-3 flex gap-2">
-                <button
-                  onClick={handleReset}
-                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-black/60 backdrop-blur text-white text-xs hover:bg-black/80 transition-colors"
-                >
-                  <RefreshCw className="w-3.5 h-3.5" />
-                  换照片
-                </button>
-                <button
-                  onClick={handleDownload}
-                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-black/60 backdrop-blur text-white text-xs hover:bg-black/80 transition-colors"
-                >
-                  <Download className="w-3.5 h-3.5" />
-                  保存
-                </button>
-              </div>
-            </>
-          )}
-
-          <input
-            ref={fileInputRef}
-            type="file"
-            accept="image/*"
-            capture="user"
-            onChange={handleFileSelect}
-            className="hidden"
-          />
-        </div>
         )}
 
         {/* Viewport — 360° 预览模式 */}
@@ -661,7 +585,7 @@ export default function ARTryOn({ onClose }: ARTryOnProps) {
         {(mode === "3d" || status === "ready") && (
           <div className="p-4">
             {/* 调试面板 */}
-            {(mode === "photo" || mode === "camera") && status === "ready" && (
+            {mode === "photo" && status === "ready" && (
               <div className="mb-4 p-3 rounded-xl bg-black/30 border border-white/10">
                 <button
                   onClick={() => setShowDebug(!showDebug)}
@@ -746,11 +670,9 @@ export default function ARTryOn({ onClose }: ARTryOnProps) {
               ))}
             </div>
 
-            {(mode === "photo" || mode === "camera") && (
+            {mode === "photo" && (
               <p className="text-[10px] text-[var(--muted-foreground)] mt-2 text-center">
-                {mode === "camera"
-                  ? "实时拍照 · AI 自动佩戴 · 可微调位置和大小"
-                  : "上传正面照片 · AI 自动佩戴 · 可微调位置和大小"}
+                拍照或上传照片 · AI 自动佩戴 · 可微调位置和大小
               </p>
             )}
             {mode === "3d" && (
